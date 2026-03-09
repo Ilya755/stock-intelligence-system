@@ -1,0 +1,54 @@
+services:
+  stock-app:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: stock_monitor_app
+    user: root
+    working_dir: /app
+    volumes:
+      - .:/app
+      - /app/build
+    restart: on-failure
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres_db:
+        condition: service_healthy 
+    environment:
+      - TERM=xterm-256color
+      - APP_CONFIG_PATH=/app/configs/app_config.json
+    tty: true
+    networks:
+      - stock_net
+    command: ["./build/stock_app"] 
+    # command: ["sleep", "infinity"] 
+
+  postgres_db:
+    image: postgres:15-alpine
+    container_name: stock_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: change_me_in_production
+      POSTGRES_DB: stocks_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data 
+      - ./sql/init_db.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - stock_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d stocks_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pg_data:
+
+networks:
+  stock_net:
+    driver: bridge

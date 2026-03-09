@@ -1,0 +1,71 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# CMake files
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Testing/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# Build directories
+build/
+bin/
+out/
+out-build/
+
+# IDE and OS specific files
+.idea/
+.vscode/
+.vs/
+*.swp
+*.DS_Store
+.DS_Store
+*.suo
+*.user
+
+# Docker volume data
+pg_data/
+
+# Logs
+logs/
+*.log
+
+# Configuration files with API Keys (CRITICAL!)
+configs/app_config.json
+app_config.json

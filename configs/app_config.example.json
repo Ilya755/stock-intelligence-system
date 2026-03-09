@@ -1,0 +1,205 @@
+{
+    "api_providers" : {
+        "twelve_data" : {
+            "base_url" : "https://api.twelvedata.com",
+            "api_key" : "",
+            "priority" : 1,
+            "enabled": true,
+            "description": "Main source for prices. Highest daily limit (800).",
+            "limits": {
+                "requests_per_day" : 800,
+                "requests_per_minute" : 8
+            },
+            "capabilities": [
+                "price_realtime_usa",
+                "price_intraday",
+                "price_daily",
+                "technical_indicators",
+                "company_profile",
+                "earnings_calendar",
+                "earnings_estimates",
+                "dividend_calendar",
+                "stock_splits",
+                "insider_transactions",
+                "institutional_holders",
+                "crypto_price_realtime",
+                "crypto_history"
+            ]
+        },
+        "finnhub" : {
+            "base_url" : "https://finnhub.io/api/v1",
+            "api_key" : "",
+            "priority" : 2,
+            "enabled": true,
+            "description": "Use for News, Sentiment and quick Quote checks. Fast per-minute limit.",
+            "limits": {
+                "requests_per_day" : -1,
+                "requests_per_minute" : 60
+            },
+            "capabilities": [
+                "price_realtime_usa",
+                "price_intraday",
+                "price_daily",
+                "financials_basic",
+                "company_profile",
+                "analyst_recommendations",
+                "price_targets",
+                "earnings_surprises",
+                "insider_transactions",
+                "news_market",
+                "news_sentiment",
+                "dividends_basic",
+                "stock_splits",
+                "crypto_history",
+                "crypto_exchanges" 
+            ]
+        },
+        "financial_modeling_prep" : {
+            "base_url" : "https://financialmodelingprep.com/api/v3",
+            "api_key" : "",
+            "priority" : 3,
+            "enabled": true,
+            "description": "Use ONLY for Fundamental Analysis (Ratios, Statements). Do not waste on price quotes.",
+            "limits": {
+                "requests_per_day" : 250,
+                "requests_per_minute" : -1
+            },
+            "capabilities": [
+                "price_realtime_usa",
+                "price_daily",
+                "income_statement",
+                "balance_sheet",
+                "cash_flow_statement",
+                "financial_ratios",
+                "company_profile",
+                "dividend_calendar",
+                "dividend_history",
+                "stock_splits",
+                "earnings_calendar",
+                "earnings_surprises",
+                "institutional_holders",
+                "senate_trading",
+                "news_market"
+            ]
+        },
+        "alpha_vantage" : {
+            "base_url" : "https://www.alphavantage.co",
+            "api_key" : "",
+            "priority" : 4,
+            "enabled": true,
+            "description": "Backup only. Extremely low limit (25/day). Use for complex server-side math indicators.",
+            "limits": {
+                "requests_per_day" : 25,
+                "requests_per_minute" : -1
+            },
+            "capabilities": [
+                "company_profile",
+                "price_intraday",
+                "price_daily",
+                "price_weekly",
+                "price_monthly",
+                "company_profile",
+                "technical_indicators",
+                "global_market_status",
+                "macro_gdp",
+                "macro_inflation",
+                "macro_fed_rate",
+                "macro_unemployment",
+                "income_statement",
+                "balance_sheet",
+                "cash_flow_statement",
+                "earnings_calendar",
+                "ipo_calendar",
+                "news_sentiment",
+                "top_gainers_losers",
+                "crypto_price_realtime",
+                "crypto_history"
+            ]
+        }, 
+        "coingecko": {
+            "base_url": "https://api.coingecko.com/api/v3",
+            "api_key": "",
+            "priority": 1,
+            "enabled": true,
+            "description": "Large database (13,000+ coins). Highest quality metadata.",
+            "limits": {
+                "requests_per_day": -1,
+                "requests_per_minute": 50
+            },
+            "capabilities": [
+                "crypto_price_realtime",
+                "crypto_price_intraday",
+                "crypto_price_daily",
+                "crypto_price_weekly",
+                "crypto_price_monthly",
+                "crypto_history_ohlcv",
+                "crypto_metadata",
+                "crypto_global_metrics",
+                "crypto_top_list",
+                "crypto_market_chart",
+                "crypto_coin_info",
+                "crypto_exchanges",
+                "crypto_trending",
+                "crypto_fear_greed_index"
+            ]
+        },
+        "binance": {
+            "base_url": "https://api.binance.com/api/v3",
+            "api_key": "",
+            "priority": 2,
+            "enabled": true,
+            "description": "Use for real-time exchange data and order books. Best for trading metrics.",
+            "limits": {
+                "requests_per_day": -1,
+                "requests_per_minute": 1200
+            },
+            "capabilities": [
+                "crypto_price_realtime",
+                "crypto_price_intraday",
+                "crypto_order_book",
+                "crypto_exchange_info",
+                "crypto_trades",
+                "crypto_klines_ohlcv",
+                "crypto_24hr_ticker",
+                "crypto_avg_price",
+                "crypto_symbol_info"
+            ]
+        },
+        "coincap": {
+            "base_url": "https://api.coincap.io/v2",
+            "api_key": "",
+            "priority": 3,
+            "enabled": true,
+            "description": "Fast backup for prices. Good for WebSocket streams.",
+            "limits": {
+                "requests_per_day": -1,
+                "requests_per_minute": 200
+            },
+            "capabilities": [
+                "crypto_price_realtime",
+                "crypto_assets_list",
+                "crypto_asset_info",
+                "crypto_history",
+                "crypto_markets",
+                "crypto_rates",
+                "crypto_exchanges"
+            ]
+        }
+    },
+    "server" : {
+        "port" : 8080,
+        "read_timeout_seconds" : 10,
+        "max_threads": 4
+    },
+    "database" : {
+        "type": "postgresql",
+        "name" : "stocks_db",
+        "host": "postgres_db", 
+        "port" : 5432,
+        "username": "admin",
+        "password": "change_me_in_production"
+    }, 
+    "logger" : {
+        "logs_path" : "/app/logs" 
+    }
+}
