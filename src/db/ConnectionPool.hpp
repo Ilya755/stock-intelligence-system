@@ -1,39 +1,63 @@
 #pragma once
 
-#include <string>
-#include <vector>
-#include <queue>
+#include <cstddef>
 #include <memory>
-#include <mutex>
-#include <condition_variable>
-#include <format>
 
-#include "pqxx/pqxx"
+#include "boost/asio/any_io_executor.hpp"
+#include "boost/asio/awaitable.hpp"
+#include "boost/asio/experimental/concurrent_channel.hpp"
+
+#include "AsyncPgConnection.hpp"
 
 class ConnectionPool {
 public:
     class ConnectionGuard {
     public:
-        ConnectionGuard(std::shared_ptr<pqxx::connection> conn, ConnectionPool& pool);
+        ConnectionGuard() = default;
+        ConnectionGuard(std::shared_ptr<AsyncPgConnection> conn, ConnectionPool& pool);
+
+        ConnectionGuard(const ConnectionGuard&) = delete;
+        ConnectionGuard& operator=(const ConnectionGuard&) = delete;
+
+        ConnectionGuard(ConnectionGuard&& other) noexcept;
+        ConnectionGuard& operator=(ConnectionGuard&& other) noexcept;
 
         ~ConnectionGuard();
 
-        pqxx::connection& Get();
+        AsyncPgConnection* operator->() const;
+        
+        AsyncPgConnection& Get() const;
 
     private:
-        std::shared_ptr<pqxx::connection> conn_;
-        ConnectionPool& pool_;
+        std::shared_ptr<AsyncPgConnection> connection_;
+        ConnectionPool* pool_ = nullptr;
+
+        void Reset();
     };
 
 
-    ConnectionPool(size_t pool_size);
+    ConnectionPool(
+        boost::asio::any_io_executor executor, 
+        std::size_t pool_size,
+        PgConnectOptions options);
 
-    std::shared_ptr<ConnectionGuard> Acquire();
+    ~ConnectionPool();
+
+    boost::asio::awaitable<void> Initialize();
+
+    boost::asio::awaitable<ConnectionGuard> Acquire();
 
 private:
-    std::queue<std::shared_ptr<pqxx::connection>> connections_;
-    std::mutex mutex_;
-    std::condition_variable cv_;
+    boost::asio::any_io_executor executor_;
+    std::size_t pool_size_;
+    PgConnectOptions options_;
 
-    void ReturnConnection(std::shared_ptr<pqxx::connection> conn);
+    using Channel = boost::asio::experimental::concurrent_channel<
+            void(boost::system::error_code, std::shared_ptr<AsyncPgConnection>)>;
+    Channel available_;
+
+
+    void Release(std::shared_ptr<AsyncPgConnection> connection) noexcept;
+
+    boost::asio::awaitable<void> ReplaceConnection();
 };

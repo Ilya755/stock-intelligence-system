@@ -1,7 +1,7 @@
 #include "ProviderManager.hpp"
 
 #include "../common/Logger.hpp"
-#include "../http/CprHttpClient.hpp"
+#include "../http/BeastHttpClient.hpp"
 #include "../providers/impl/AlphaVantageProvider.hpp"
 #include "../providers/impl/BinanceProvider.hpp"
 #include "../providers/impl/CoinCapProvider.hpp"
@@ -15,11 +15,12 @@ ProviderManager& ProviderManager::GetInstance() {
     return instance;
 }
 
-void ProviderManager::Init(const Config& config) {
-    Logger::Info("[ProviderManager] Initializing ProviderManager...");
+void ProviderManager::Init(const Config& config, boost::asio::any_io_executor executor) {
+    Logger::Info(
+        "[ProviderManager] Initializing ProviderManager...");
     
     if (!http_client_) {
-        http_client_ = std::make_shared<CprHttpClient>();
+        http_client_ = std::make_shared<BeastHttpClient>(std::move(executor));
     }
 
     stock_providers_.clear();
@@ -29,58 +30,71 @@ void ProviderManager::Init(const Config& config) {
 
     for (const auto& [key, cfg] : api_configs) {
         if (!cfg.enabled) {
-            Logger::Info("[ProviderManager] Provider '{}' is disabled in config. Skipping.", key);
+            Logger::Info(
+                "[ProviderManager] Provider '{}' is disabled in config. Skipping.",
+                key);
             continue;
         }
 
         try {
             if (key == "alpha_vantage") {
-                Logger::Debug("[ProviderManager] Connecting AlphaVantage Provider...");
+                Logger::Debug(
+                    "[ProviderManager] Connecting AlphaVantage Provider...");
 
                 auto p = std::make_shared<AlphaVantageProvider>(http_client_, key, cfg.api_key, cfg.base_url, 
                                                                     cfg.limits, cfg.capabilities);
                 AddProvider(p, cfg.priority);
             } else if (key == "binance") {
-                Logger::Debug("[ProviderManager] Connecting Binance Provider...");
+                Logger::Debug(
+                    "[ProviderManager] Connecting Binance Provider...");
 
                 auto p = std::make_shared<BinanceProvider>(http_client_, key, cfg.api_key, cfg.base_url, 
                                                                 cfg.limits, cfg.capabilities);
                 AddProvider(p, cfg.priority);
             } else if (key == "coincap") {
-                Logger::Debug("[ProviderManager] Connecting CoinCap Provider...");
+                Logger::Debug(
+                    "[ProviderManager] Connecting CoinCap Provider...");
 
                 auto p = std::make_shared<CoinCapProvider>(http_client_, key, cfg.api_key, cfg.base_url, 
                                                                 cfg.limits, cfg.capabilities);
                 AddProvider(p, cfg.priority);
             } else if (key == "coingecko") {
-                Logger::Debug("[ProviderManager] Connecting CoinGecko Provider...");
+                Logger::Debug(
+                    "[ProviderManager] Connecting CoinGecko Provider...");
 
                 auto p = std::make_shared<CoinGeckoProvider>(http_client_, key, cfg.api_key, cfg.base_url, 
                                                                 cfg.limits, cfg.capabilities);
                 AddProvider(p, cfg.priority);
             } else if (key == "finnhub") {
-                Logger::Debug("[ProviderManager] Connecting Finnhub Provider...");
+                Logger::Debug(
+                    "[ProviderManager] Connecting Finnhub Provider...");
 
                 auto p = std::make_shared<FinnhubProvider>(http_client_, key, cfg.api_key, cfg.base_url, 
                                                                 cfg.limits, cfg.capabilities);
                 AddProvider(p, cfg.priority);
             } else if (key == "financial_modeling_prep") {
-                Logger::Debug("[ProviderManager] Connecting FMP Provider...");
+                Logger::Debug(
+                    "[ProviderManager] Connecting FMP Provider...");
 
                 auto p = std::make_shared<FmpProvider>(http_client_, key, cfg.api_key, cfg.base_url, 
                                                             cfg.limits, cfg.capabilities);
                 AddProvider(p, cfg.priority);
             } else if (key == "twelve_data") {
-                Logger::Debug("[ProviderManager] Connecting TwelveData Provider...");
+                Logger::Debug(
+                    "[ProviderManager] Connecting TwelveData Provider...");
 
                 auto p = std::make_shared<TwelveDataProvider>(http_client_, key, cfg.api_key, cfg.base_url, 
                                                                 cfg.limits, cfg.capabilities);
                 AddProvider(p, cfg.priority);
             } else {
-                Logger::Warn("Unknown provider in config: '{}'.", key);
+                Logger::Warn(
+                    "Unknown provider in config: '{}'.", 
+                    key);
             }
         } catch (const std::exception& ex) {
-            Logger::Error("Failed to initialize provider '{}': {}", key, ex.what());
+            Logger::Error(
+                "Failed to initialize provider '{}': {}", 
+                key, ex.what());
         }
     }
 
@@ -110,19 +124,23 @@ void ProviderManager::Init(const Config& config) {
             }
         }
 
-        Logger::Info("[ProviderManager] Initialized. Stocks: [{}], Crypto: [{}]", ss_stock.str(), ss_crypto.str());
+        Logger::Info(
+            "[ProviderManager] Initialized. Stocks: [{}], Crypto: [{}]", 
+            ss_stock.str(), ss_crypto.str());
     }
 }
 
-std::optional<double> ProviderManager::GetStockPrice(const std::string& ticker) {
-    return ExecuteStockRequest<double>(ProviderCapability::PriceRealtime,
+boost::asio::awaitable<std::optional<double>> ProviderManager::GetStockPrice(const std::string& ticker) {
+    co_return co_await ExecuteStockRequest<double>(ProviderCapability::PriceRealtime,
                                     [&](auto p) { return p->GetStockPrice(ticker); },
                                     "GetStockPrice", ticker);
 }
 
-std::vector<StockPriceCandle> ProviderManager::GetStockHistory(const std::string& ticker, 
-                                                                Timestamp from, Timestamp to, 
-                                                                TimeFrame interval) {
+boost::asio::awaitable<std::vector<StockPriceCandle>> ProviderManager::GetStockHistory(
+        const std::string& ticker, 
+        Timestamp from, 
+        Timestamp to, 
+        TimeFrame interval) {
     ProviderCapability cap = (interval == TimeFrame::Daily) ? ProviderCapability::PriceDaily : 
                                                                 ProviderCapability::PriceIntraday;
 
@@ -130,73 +148,84 @@ std::vector<StockPriceCandle> ProviderManager::GetStockHistory(const std::string
         cap = ProviderCapability::PriceHistoryDeep;
     }
 
-    return ExecuteStockRequestList<StockPriceCandle>(cap,
+    co_return co_await ExecuteStockRequestList<StockPriceCandle>(cap,
                                     [&](auto p) { return p->GetStockHistory(ticker, from, to, interval); },
                                     "GetStockHistory", ticker);
 }
 
-std::optional<CompanyFullInfo> ProviderManager::GetCompanyProfile(const std::string& ticker) {
-    return ExecuteStockRequest<CompanyFullInfo>(ProviderCapability::CompanyProfile,
+boost::asio::awaitable<std::optional<CompanyFullInfo>> ProviderManager::GetCompanyProfile(
+        const std::string& ticker) {
+    co_return co_await ExecuteStockRequest<CompanyFullInfo>(ProviderCapability::CompanyProfile,
                                     [&](auto p) { return p->GetCompanyProfile(ticker); },
                                     "GetCompanyProfile", ticker);
 }
 
-std::vector<TickerSearchResult> ProviderManager::SearchStockTicker(const std::string& query) {
+boost::asio::awaitable<std::vector<TickerSearchResult>> ProviderManager::SearchStockTicker(
+        const std::string& query) {
     for (const auto& p : stock_providers_) {
-        auto result = p.provider->SearchStockTicker(query);
+        auto result = co_await p.provider->SearchStockTicker(query);
         if (!result.empty()) {
-            return result;
+            co_return result;
         }
     }
-    return {};
+    co_return std::vector<TickerSearchResult>{};
 }
 
-std::vector<CompanyFinancialReport> ProviderManager::GetFinancialReports(const std::string& ticker) {
-    return ExecuteStockRequestList<CompanyFinancialReport>(ProviderCapability::FinancialsDeep,
+boost::asio::awaitable<std::vector<CompanyFinancialReport>> ProviderManager::GetFinancialReports(
+        const std::string& ticker) {
+    co_return co_await ExecuteStockRequestList<CompanyFinancialReport>(ProviderCapability::FinancialsDeep,
                                     [&](auto p) { return p->GetFinancialReports(ticker); },
                                     "GetFinancialReports", ticker);
 }
 
-std::vector<StockDividends> ProviderManager::GetDividends(const std::string& ticker, Date from, Date to) {
-    return ExecuteStockRequestList<StockDividends>(ProviderCapability::Dividends,
+boost::asio::awaitable<std::vector<StockDividends>> ProviderManager::GetDividends(
+        const std::string& ticker,
+        Date from, 
+        Date to) {
+    co_return co_await ExecuteStockRequestList<StockDividends>(ProviderCapability::Dividends,
                                     [&](auto p) { return p->GetDividends(ticker, from, to); },
                                     "GetDividends", ticker);
 }
 
-std::optional<double> ProviderManager::GetCryptoPrice(const std::string& ticker) {
-    return ExecuteCryptoRequest<double>(CryptoCapability::RealtimePrice,
+boost::asio::awaitable<std::optional<double>> ProviderManager::GetCryptoPrice(const std::string& ticker) {
+    co_return co_await ExecuteCryptoRequest<double>(CryptoCapability::RealtimePrice,
                                     [&](auto p) { return p->GetCryptoPrice(ticker); },
                                     "GetCryptoPrice", ticker);
 }
 
-std::vector<CryptoPriceCandle> ProviderManager::GetCryptoHistory(const std::string& ticker, 
-                                                                    Timestamp from, Timestamp to, 
-                                                                    TimeFrame interval) {
-    return ExecuteCryptoRequestList<CryptoPriceCandle>(CryptoCapability::History,
+boost::asio::awaitable<std::vector<CryptoPriceCandle>> ProviderManager::GetCryptoHistory(
+        const std::string& ticker, 
+        Timestamp from, 
+        Timestamp to, 
+        TimeFrame interval) {
+    co_return co_await ExecuteCryptoRequestList<CryptoPriceCandle>(CryptoCapability::History,
                                     [&](auto p) { return p->GetCryptoHistory(ticker, from, to, interval); },
                                     "GetCryptoHistory", ticker);
 }
 
-std::optional<CryptoAsset> ProviderManager::GetCryptoAssetInfo(const std::string& ticker) {
-    return ExecuteCryptoRequest<CryptoAsset>(CryptoCapability::Metadata,
+boost::asio::awaitable<std::optional<CryptoAsset>> ProviderManager::GetCryptoAssetInfo(
+        const std::string& ticker) {
+    co_return co_await ExecuteCryptoRequest<CryptoAsset>(CryptoCapability::Metadata,
                                     [&](auto p) { return p->GetCryptoAssetInfo(ticker); },
                                     "GetCryptoAssetInfo", ticker);
 }
 
-std::vector<CryptoAsset> ProviderManager::GetCryptoTopList(int limit) {
-    return ExecuteCryptoRequestList<CryptoAsset>(CryptoCapability::TopList,
+boost::asio::awaitable<std::vector<CryptoAsset>> ProviderManager::GetCryptoTopList(int limit) {
+    co_return co_await ExecuteCryptoRequestList<CryptoAsset>(CryptoCapability::TopList,
                                     [&](auto p) { return p->GetCryptoTopList(limit); },
                                     "GetCryptoTopList", "TOP");
 }
 
-std::optional<GlobalCryptoMetrics> ProviderManager::GetGlobalCryptoMetrics() {
-    return ExecuteCryptoRequest<GlobalCryptoMetrics>(CryptoCapability::GlobalMetrics,
+boost::asio::awaitable<std::optional<GlobalCryptoMetrics>> ProviderManager::GetGlobalCryptoMetrics() {
+    co_return co_await ExecuteCryptoRequest<GlobalCryptoMetrics>(CryptoCapability::GlobalMetrics,
                                     [&](auto p) { return p->GetGlobalMetrics(); },
                                     "GetGlobalCryptoMetrics", "GLOBAL");
 }
 
-std::optional<OrderBook> ProviderManager::GetOrderBook(const std::string& ticker, int depth) {
-    return ExecuteCryptoRequest<OrderBook>(CryptoCapability::OrderBook,
+boost::asio::awaitable<std::optional<OrderBook>> ProviderManager::GetOrderBook(
+        const std::string& ticker, 
+        int depth) {
+    co_return co_await ExecuteCryptoRequest<OrderBook>(CryptoCapability::OrderBook,
                                     [&](auto p) { return p->GetOrderBook(ticker, depth); },
                                     "GetOrderBook", ticker);
 }
@@ -213,101 +242,133 @@ void ProviderManager::AddProvider(std::shared_ptr<T> provider, int priority) {
 }
 
 template <typename ResultType, typename Func>
-std::optional<ResultType> ProviderManager::ExecuteStockRequest(ProviderCapability cap, Func action, 
-                                                                const std::string& action_name, 
-                                                                const std::string& context) {
+boost::asio::awaitable<std::optional<ResultType>> ProviderManager::ExecuteStockRequest(
+        ProviderCapability cap, 
+        Func action, 
+        const std::string& action_name, 
+        const std::string& context) {
     for (const auto& p : stock_providers_) {
         if (p.provider->HasCapability(cap)) {
-            Logger::Debug("[ProviderManager] Using {} for {} ({})", p.provider->GetName(), action_name, context);
+            Logger::Debug(
+                "[ProviderManager] Using {} for {} ({})", 
+                p.provider->GetName(), action_name, context);
             
             try{
-                auto result = action(p.provider);
+                auto result = co_await action(p.provider);
                 if (result.has_value()) {
-                    return result.value();
+                    co_return result.value();
                 }
-                Logger::Warn("[ProviderManager] {} failed with {}. Trying next...", 
-                                action_name, p.provider->GetName());
+                Logger::Warn(
+                    "[ProviderManager] {} failed with {}. Trying next...", 
+                    action_name, p.provider->GetName());
             } catch (const std::exception& ex) {
-                Logger::Warn("[ProviderManager] {} threw an exception: {}. Trying next...", 
-                                p.provider->GetName(), ex.what());
+                Logger::Warn(
+                    "[ProviderManager] {} threw an exception: {}. Trying next...", 
+                    p.provider->GetName(), ex.what());
             }
         }
     }
-    Logger::Error("[ProviderManager] All providers failed for {} ({})", action_name, context);
-    return std::nullopt;
+    Logger::Error(
+        "[ProviderManager] All providers failed for {} ({})", 
+        action_name, context);
+    co_return std::nullopt;
 }
 
 template <typename ResultItem, typename Func>
-std::vector<ResultItem> ProviderManager::ExecuteStockRequestList(ProviderCapability cap, Func action, 
-                                                                    const std::string& action_name, 
-                                                                    const std::string& context) {
+boost::asio::awaitable<std::vector<ResultItem>> ProviderManager::ExecuteStockRequestList(
+        ProviderCapability cap, 
+        Func action, 
+        const std::string& action_name, 
+        const std::string& context) {
     for (const auto& p : stock_providers_) {
         if (p.provider->HasCapability(cap)) {
-            Logger::Debug("[ProviderManager] Using {} for {} ({})", p.provider->GetName(), action_name, context);
+            Logger::Debug(
+                "[ProviderManager] Using {} for {} ({})", 
+                p.provider->GetName(), action_name, context);
             
             try {
-                auto result = action(p.provider);
+                auto result = co_await action(p.provider);
                 if (!result.empty()) {
-                    return result;
+                    co_return result;
                 }
-                Logger::Warn("[ProviderManager] {} failed with {}. Trying next...", 
-                                action_name, p.provider->GetName());
+                Logger::Warn(
+                    "[ProviderManager] {} failed with {}. Trying next...", 
+                    action_name, p.provider->GetName());
             } catch (const std::exception& ex) {
-                Logger::Warn("[ProviderManager] {} threw an exception: {}. Trying next...", 
-                                p.provider->GetName(), ex.what());
+                Logger::Warn(
+                    "[ProviderManager] {} threw an exception: {}. Trying next...", 
+                    p.provider->GetName(), ex.what());
             }
         }
     }
-    Logger::Error("[ProviderManager] All providers failed or returned empty for {} ({})", action_name, context);
-    return {};
+    Logger::Error(
+        "[ProviderManager] All providers failed or returned empty for {} ({})", 
+        action_name, context);
+    co_return std::vector<ResultItem>{};
 }
 
 template <typename ResultType, typename Func>
-std::optional<ResultType> ProviderManager::ExecuteCryptoRequest(CryptoCapability cap, Func action, 
-                                                                const std::string& action_name, 
-                                                                const std::string& context) {
+boost::asio::awaitable<std::optional<ResultType>> ProviderManager::ExecuteCryptoRequest(
+        CryptoCapability cap, 
+        Func action, 
+        const std::string& action_name, 
+        const std::string& context) {
     for (const auto& p : crypto_providers_) {
         if (p.provider->HasCapability(cap)) {
-            Logger::Debug("[ProviderManager] Using {} for {} ({})", p.provider->GetName(), action_name, context);
+            Logger::Debug(
+                "[ProviderManager] Using {} for {} ({})", 
+                p.provider->GetName(), action_name, context);
             
             try {
-                auto result = action(p.provider);
+                auto result = co_await action(p.provider);
                 if (result.has_value()) {
-                    return result.value();
+                    co_return result.value();
                 }
-                Logger::Warn("[ProviderManager] {} failed with {}. Trying next...", 
-                                action_name, p.provider->GetName());
+                Logger::Warn(
+                    "[ProviderManager] {} failed with {}. Trying next...", 
+                    action_name, p.provider->GetName());
             } catch (const std::exception& ex) {
-                Logger::Warn("[ProviderManager] {} threw an exception: {}. Trying next...", 
-                                p.provider->GetName(), ex.what());
+                Logger::Warn(
+                    "[ProviderManager] {} threw an exception: {}. Trying next...", 
+                    p.provider->GetName(), ex.what());
             }
         }
     }
-    Logger::Error("[ProviderManager] All crypto providers failed for {} ({})", action_name, context);
-    return std::nullopt;
+    Logger::Error(
+        "[ProviderManager] All crypto providers failed for {} ({})", 
+        action_name, context);
+    co_return std::nullopt;
 }
 
 template <typename ResultItem, typename Func>
-std::vector<ResultItem> ProviderManager::ExecuteCryptoRequestList(CryptoCapability cap, Func action, 
-                                                                    const std::string& action_name, 
-                                                                    const std::string& context) {
+boost::asio::awaitable<std::vector<ResultItem>> ProviderManager::ExecuteCryptoRequestList(
+        CryptoCapability cap, 
+        Func action, 
+        const std::string& action_name, 
+        const std::string& context) {
     for (const auto& p : crypto_providers_) {
         if (p.provider->HasCapability(cap)) {
-            Logger::Debug("[ProviderManager] Using {} for {} ({})", p.provider->GetName(), action_name, context);
+            Logger::Debug(
+                "[ProviderManager] Using {} for {} ({})", 
+                p.provider->GetName(), action_name, context);
             
             try {
-                auto result = action(p.provider);
+                auto result = co_await action(p.provider);
                 if (!result.empty()) {
-                    return result;
+                    co_return result;
                 }
-                Logger::Warn("[ProviderManager] {} failed with {}. Trying next...", 
-                                action_name, p.provider->GetName());
+                Logger::Warn(
+                    "[ProviderManager] {} failed with {}. Trying next...", 
+                    action_name, p.provider->GetName());
             } catch (const std::exception& ex) {
-                Logger::Warn("[ProviderManager] {} threw an exception: {}. Trying next...", 
-                                p.provider->GetName(), ex.what());
+                Logger::Warn(
+                    "[ProviderManager] {} threw an exception: {}. Trying next...", 
+                    p.provider->GetName(), ex.what());
             }
         }
     }
-    Logger::Error("[ProviderManager] All crypto providers failed for {} ({})", action_name, context);
-    return {};
+    Logger::Error(
+        "[ProviderManager] All crypto providers failed for {} ({})", 
+        action_name, context);
+    co_return std::vector<ResultItem>{};
 }

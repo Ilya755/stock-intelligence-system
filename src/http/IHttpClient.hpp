@@ -3,6 +3,8 @@
 #include <string>
 #include <map>
 
+#include "boost/asio/awaitable.hpp"
+
 struct HttpResponse {
     int status_code;
     std::string text;
@@ -13,7 +15,8 @@ class IHttpClient {
 public:
     virtual ~IHttpClient() = default;
 
-    virtual HttpResponse Get(const std::string& url, 
-                                const std::map<std::string, std::string>& params, 
-                                const std::map<std::string, std::string>& headers = {}) = 0;
+    virtual boost::asio::awaitable<HttpResponse> GetAsync(
+        const std::string& url, 
+        const std::map<std::string, std::string>& params, 
+        const std::map<std::string, std::string>& headers = {}) = 0;
 };

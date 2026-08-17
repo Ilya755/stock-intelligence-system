@@ -1,16 +1,15 @@
 #include "TcpSession.hpp"
 
+#include "boost/asio/co_spawn.hpp"
+#include "boost/asio/use_awaitable.hpp"
+
 #include "../common/Logger.hpp"
 
 using boost::asio::ip::tcp;
 
-TcpSession::TcpSession(tcp::socket socket, 
-                        std::shared_ptr<RequestHandler> handler,
-                        std::shared_ptr<ThreadPool> thread_pool)
+TcpSession::TcpSession(tcp::socket socket, std::shared_ptr<RequestHandler> handler)
     : socket_(std::move(socket))
-    , strand_(socket_.get_executor())
-    , handler_(handler)
-    , thread_pool_(thread_pool) {
+    , handler_(std::move(handler)) {
         boost::system::error_code ec;
         socket_.set_option(boost::asio::socket_base::keep_alive(true), ec);
     }
@@ -18,80 +17,60 @@ TcpSession::TcpSession(tcp::socket socket,
 void TcpSession::Start() {
     try {
         remote_endpoint_ = socket_.remote_endpoint().address().to_string();
-        Logger::Debug("[TcpSession] Client connected: {}", remote_endpoint_);
-    } catch (...) {
+        Logger::Debug(
+            "[TcpSession] Client connected: {}", 
+            remote_endpoint_);
+    } catch (const std::exception&) {
         remote_endpoint_ = "Unknown";
     }
-    
-    DoRead();
+
+    auto self = shared_from_this();
+    boost::asio::co_spawn(
+        socket_.get_executor(),
+        [self]() -> boost::asio::awaitable<void> {
+            co_await self->Run();
+        },
+        [self](std::exception_ptr error) {
+            if (!error) {
+                return;
+            }
+            try {
+                std::rethrow_exception(error);
+            } catch (const std::exception& ex) {
+                Logger::Warn(
+                    "[TcpSession] Session error for {}: {}",
+                    self->remote_endpoint_, ex.what());
+            }
+        });
 }
 
 TcpSession::~TcpSession() {
-    Logger::Debug("[TcpSession] Session disconnected: {}", remote_endpoint_);
+    Logger::Debug(
+        "[TcpSession] Session disconnected: {}",
+        remote_endpoint_);
 }
 
-void TcpSession::DoRead() {
-    auto self(shared_from_this());
-    
-    boost::asio::async_read_until(socket_, buffer_, '\n',
-        boost::asio::bind_executor(strand_, 
-            [this, self](boost::system::error_code ec, std::size_t length) {
-                if (!ec) {
-                    std::istream is(&buffer_);
-                    std::string request_str;
-                    std::getline(is, request_str);
+boost::asio::awaitable<void> TcpSession::Run() {
+    try {
+        while (socket_.is_open()) {
+            co_await boost::asio::async_read_until(
+                socket_, buffer_, '\n', boost::asio::use_awaitable);
 
-                    if (!request_str.empty()) {
-                        thread_pool_->PushTask([this, self, request_str]() {
-                            ProcessRequest(request_str);
-                        });
-                    }
-                    
-                    DoRead(); 
-                } else {
-                    if (ec != boost::asio::error::eof) {
-                        Logger::Warn("[TcpSession] Read error from {}: {}", 
-                            remote_endpoint_, ec.message());
-                    }
-                }
+            std::istream input(&buffer_);
+            std::string request;
+            std::getline(input, request);
+            if (request.empty()) {
+                continue;
             }
-        ));
-}
 
-void TcpSession::ProcessRequest(std::string request) {
-    std::string response = handler_->HandleRequest(request);
-    Deliver(response);
-}
-
-void TcpSession::Deliver(const std::string& msg) {
-    auto self(shared_from_this());
-
-    boost::asio::post(strand_, [this, self, msg]() {
-        bool write_in_progress = !write_queue_.empty();
-        write_queue_.push_back(msg);
-        
-        if (!write_in_progress) {
-            DoWrite();
+            const std::string response = co_await handler_->HandleRequest(request);
+            co_await boost::asio::async_write(
+                socket_, boost::asio::buffer(response), boost::asio::use_awaitable);
         }
-    });
-}
-
-void TcpSession::DoWrite() {
-    auto self(shared_from_this());
-
-    boost::asio::async_write(socket_, boost::asio::buffer(write_queue_.front()),
-        boost::asio::bind_executor(strand_,
-            [this, self](boost::system::error_code ec, std::size_t length) {
-                if (!ec) {
-                    write_queue_.pop_front();
-                    if (!write_queue_.empty()) {
-                        DoWrite();
-                    }
-                } else {
-                    Logger::Error("[TcpSession] Write error to {}: {}", remote_endpoint_, ec.message());
-                    socket_.close();
-                }
-            }
-        )
-    );
+    } catch (const boost::system::system_error& ex) {
+        if (ex.code() != boost::asio::error::eof &&
+            ex.code() != boost::asio::error::operation_aborted) {
+            throw;
+        }
+    }
 }

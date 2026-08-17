@@ -19,7 +19,9 @@ FinnhubProvider::FinnhubProvider(std::shared_ptr<IHttpClient> client,
             } else if (crypto_cap.has_value()) {
                 crypto_caps_.insert(crypto_cap.value());
             } else {
-                Logger::Warn("[Finnhub] Unknown capability '{}' in config", s);
+                Logger::Warn(
+                    "[Finnhub] Unknown capability '{}' in config", 
+                    s);
             }
         }
     }
@@ -32,45 +34,51 @@ bool FinnhubProvider::HasCapability(const ProviderCapability cap) const {
     return stock_caps_.contains(cap);
 }
 
-int FinnhubProvider::GetRemainingRequests() const { return -1; }    // ToDo
+boost::asio::awaitable<int> FinnhubProvider::GetRemainingRequests() const { co_return -1; }    // ToDo
 
-std::optional<double> FinnhubProvider::GetStockPrice(const std::string& ticker) {
+boost::asio::awaitable<std::optional<double>> FinnhubProvider::GetStockPrice(const std::string& ticker) {
     if (!HasCapability(ProviderCapability::PriceRealtime)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformGet("/quote", {{"symbol", ticker}});
+    auto json_opt = co_await PerformGetAsync("/quote", {{"symbol", ticker}});
 
     if (!json_opt.has_value()) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     try {
         double price = (json_opt.value())["c"].get<double>();
 
         if (price == 0.0) {
-            Logger::Warn("[Finnhub] Price is 0 for ticker '{}'. Symbol might be invalid.", ticker);
-            return std::nullopt;
+            Logger::Warn(
+                "[Finnhub] Price is 0 for ticker '{}'. Symbol might be invalid.", 
+                ticker);
+            co_return std::nullopt;
         }
-        return price;
+        co_return price;
     } catch (const std::exception& ex) {
-        Logger::Error("[Finnhub] Price parse error for {}: {}", ticker, ex.what());
-        return std::nullopt;
+        Logger::Error(
+            "[Finnhub] Price parse error for {}: {}", 
+            ticker, ex.what());
+        co_return std::nullopt;
     }
 }
 
-std::vector<StockPriceCandle> FinnhubProvider::GetStockHistory(const std::string& ticker, 
-                                                                const Timestamp from, const Timestamp to, 
-                                                                const TimeFrame interval) {
+boost::asio::awaitable<std::vector<StockPriceCandle>> FinnhubProvider::GetStockHistory(
+        const std::string& ticker, 
+        const Timestamp from, 
+        const Timestamp to, 
+        const TimeFrame interval) {
     if (interval == TimeFrame::Daily && !HasCapability(ProviderCapability::PriceDaily)) {
-        return {};
+        co_return std::vector<StockPriceCandle>{};
     } else if ((interval == TimeFrame::Minute1 || interval == TimeFrame::Minute5 || 
                     interval == TimeFrame::Minute15 || interval == TimeFrame::Hourly) && 
                     !HasCapability(ProviderCapability::PriceIntraday)) {
-        return {};
+        co_return std::vector<StockPriceCandle>{};
     } else if (interval == TimeFrame::Weekly || interval == TimeFrame::Monthly && 
                     !HasCapability(ProviderCapability::PriceHistoryDeep)) {
-        return {};
+        co_return std::vector<StockPriceCandle>{};
     }
 
     std::string resolution =  ConvertInterval(interval);
@@ -78,7 +86,7 @@ std::vector<StockPriceCandle> FinnhubProvider::GetStockHistory(const std::string
     long long from_ts = std::chrono::duration_cast<std::chrono::seconds>(from.time_since_epoch()).count();
     long long to_ts = std::chrono::duration_cast<std::chrono::seconds>(to.time_since_epoch()).count();
 
-    auto json_opt = PerformGet("/stock/candle", {
+    auto json_opt = co_await PerformGetAsync("/stock/candle", {
                                 {"symbol", ticker},
                                 {"resolution", resolution},
                                 {"from", std::to_string(from_ts)},
@@ -86,17 +94,21 @@ std::vector<StockPriceCandle> FinnhubProvider::GetStockHistory(const std::string
                             });
 
     if (!json_opt.has_value()) {
-        return {};
+        co_return std::vector<StockPriceCandle>{};
     }
     
     std::string status = (json_opt.value()).value("s", "error");
     if (status != "ok") {
         if (status == "no_data") {
-            Logger::Info("[Finnhub] No data for ticker '{}'", ticker);
+            Logger::Info(
+                "[Finnhub] No data for ticker '{}'", 
+                ticker);
         } else {
-            Logger::Warn("[Finnhub] Status '{}' for ticker '{}'", status, ticker);
+            Logger::Warn(
+                "[Finnhub] Status '{}' for ticker '{}'", 
+                status, ticker);
         }
-        return {};
+        co_return std::vector<StockPriceCandle>{};
     }
 
     std::vector<StockPriceCandle> results;
@@ -104,7 +116,7 @@ std::vector<StockPriceCandle> FinnhubProvider::GetStockHistory(const std::string
         const auto& j = json_opt.value();
         
         if (!j.contains("t") || !j.contains("c") || !j["t"].is_array()) {
-                return {};
+            co_return std::vector<StockPriceCandle>{};
         }
 
         const auto& t = j["t"];
@@ -130,20 +142,23 @@ std::vector<StockPriceCandle> FinnhubProvider::GetStockHistory(const std::string
             results.push_back(candle);
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[Finnhub] History parse error for '{}': {}", ticker, ex.what());
+        Logger::Error(
+            "[Finnhub] History parse error for '{}': {}", 
+            ticker, ex.what());
     }
-    return results;
+    co_return results;
 }
 
-std::optional<CompanyFullInfo> FinnhubProvider::GetCompanyProfile(const std::string& ticker) {
+boost::asio::awaitable<std::optional<CompanyFullInfo>> FinnhubProvider::GetCompanyProfile(
+        const std::string& ticker) {
     if (!HasCapability(ProviderCapability::CompanyProfile)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformGet("/stock/profile2", {{"symbol", ticker}});
+    auto json_opt = co_await PerformGetAsync("/stock/profile2", {{"symbol", ticker}});
     
     if (!json_opt.has_value() || json_opt->empty()) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     try {
@@ -160,18 +175,21 @@ std::optional<CompanyFullInfo> FinnhubProvider::GetCompanyProfile(const std::str
         info.description = "";
         info.updated_at = std::chrono::system_clock::now();
         
-        return info;
+        co_return info;
     } catch (const std::exception& ex) {
-        Logger::Error("[Finnhub] Profile parse error for '{}': {}", ticker, ex.what());
-        return std::nullopt;
+        Logger::Error(
+            "[Finnhub] Profile parse error for '{}': {}", 
+            ticker, ex.what());
+        co_return std::nullopt;
     }
 }
 
-std::vector<TickerSearchResult> FinnhubProvider::SearchStockTicker(const std::string& ticker) {
-    auto json_opt = PerformGet("/search", {{"q", ticker}});
+boost::asio::awaitable<std::vector<TickerSearchResult>> FinnhubProvider::SearchStockTicker(
+        const std::string& ticker) {
+    auto json_opt = co_await PerformGetAsync("/search", {{"q", ticker}});
 
     if (!json_opt.has_value() || !json_opt->contains("result")) {
-        return {};
+        co_return std::vector<TickerSearchResult>{};
     }
 
     std::vector<TickerSearchResult> results;
@@ -179,7 +197,7 @@ std::vector<TickerSearchResult> FinnhubProvider::SearchStockTicker(const std::st
         const auto& data = (json_opt.value())["result"];
 
         if (!data.is_array()) {
-            return {};
+            co_return std::vector<TickerSearchResult>{};
         }
         
         results.reserve(data.size());
@@ -198,24 +216,29 @@ std::vector<TickerSearchResult> FinnhubProvider::SearchStockTicker(const std::st
             results.push_back(res);
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[Finnhub] Search parse error: {}", ex.what());
+        Logger::Error(
+            "[Finnhub] Search parse error: {}", 
+            ex.what());
     }
-    return results;
+    co_return results;
 }
 
-std::vector<StockDividends> FinnhubProvider::GetDividends(const std::string& ticker, const Date from, const Date to) {
+boost::asio::awaitable<std::vector<StockDividends>> FinnhubProvider::GetDividends(
+        const std::string& ticker, 
+        const Date from, 
+        const Date to) {
     if (!HasCapability(ProviderCapability::Dividends)) {
-        return {};
+        co_return std::vector<StockDividends>{};
     }
 
-    auto json_opt = PerformGet("/stock/dividend", {
+    auto json_opt = co_await PerformGetAsync("/stock/dividend", {
                                 {"symbol", ticker},
                                 {"from", TimeUtils::DateToString(from)},
                                 {"to", TimeUtils::DateToString(to)}
                             });
 
     if (!json_opt.has_value() || !json_opt->is_array()) {
-        return {};
+        co_return std::vector<StockDividends>{};
     }
 
     std::vector<StockDividends> result;
@@ -237,20 +260,23 @@ std::vector<StockDividends> FinnhubProvider::GetDividends(const std::string& tic
             result.push_back(d);
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[Finnhub] Parse Dividends error for '{}': {}", ticker, ex.what());
+        Logger::Error(
+            "[Finnhub] Parse Dividends error for '{}': {}", 
+            ticker, ex.what());
     }
-    return result;
+    co_return result;
 }
 
-std::optional<AnalystRating> FinnhubProvider::GetAnalystRatings(const std::string& ticker) {
+boost::asio::awaitable<std::optional<AnalystRating>> FinnhubProvider::GetAnalystRatings(
+        const std::string& ticker) {
     if (!HasCapability(ProviderCapability::AnalystRatings)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformGet("/stock/recommendation", {{"symbol", ticker}});
+    auto json_opt = co_await PerformGetAsync("/stock/recommendation", {{"symbol", ticker}});
     
     if (!json_opt.has_value() || !json_opt->is_array() || json_opt->empty()) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     try {
@@ -263,29 +289,33 @@ std::optional<AnalystRating> FinnhubProvider::GetAnalystRatings(const std::strin
         ar.sell = fresh.value("sell", 0);
         ar.target_price = 0.0; 
 
-        return ar;
+        co_return ar;
     } catch (const std::exception& ex) {
-        Logger::Error("[Finnhub] Failed to parse Analyst Ratings for '{}': {}", ticker, ex.what());
-        return std::nullopt;
+        Logger::Error(
+            "[Finnhub] Failed to parse Analyst Ratings for '{}': {}", 
+            ticker, ex.what());
+        co_return std::nullopt;
     }
 }
 
-std::vector<MarketNews> FinnhubProvider::GetCompanyNews(const std::string& ticker, const int limit) {
+boost::asio::awaitable<std::vector<MarketNews>> FinnhubProvider::GetCompanyNews(
+        const std::string& ticker, 
+        const int limit) {
     if (!HasCapability(ProviderCapability::News)) {
-        return {};
+        co_return std::vector<MarketNews>{};
     }
 
     auto now = std::chrono::system_clock::now();
     auto week_ago = now - std::chrono::hours(24 * 7);
     
-    auto json_opt = PerformGet("/company-news", {
+    auto json_opt = co_await PerformGetAsync("/company-news", {
                                 {"symbol", ticker},
                                 {"from", TimeUtils::DateToString(Date(std::chrono::floor<std::chrono::days>(week_ago)))},
                                 {"to", TimeUtils::DateToString(Date(std::chrono::floor<std::chrono::days>(now)))}
                             });
 
     if (!json_opt.has_value() || !json_opt->is_array()) {
-        return {};
+        co_return std::vector<MarketNews>{};
     }
 
     const auto& j = json_opt.value();
@@ -309,21 +339,25 @@ std::vector<MarketNews> FinnhubProvider::GetCompanyNews(const std::string& ticke
 
             news_list.push_back(n);
         } catch (const std::exception& ex) {
-            Logger::Error("[Finnhub] Failed to parse Company News for '{}': {}", ticker, ex.what());
+            Logger::Error(
+                "[Finnhub] Failed to parse Company News for '{}': {}", 
+                ticker, ex.what());
         }
     }
-    return news_list;
+    co_return news_list;
 }
 
-std::vector<MarketNews> FinnhubProvider::GetMarketNews(const std::string& category, const int limit) {
+boost::asio::awaitable<std::vector<MarketNews>> FinnhubProvider::GetMarketNews(
+        const std::string& category, 
+        const int limit) {
     if (!HasCapability(ProviderCapability::News)) {
-        return {};
+        co_return std::vector<MarketNews>{};
     }
 
-    auto json_opt = PerformGet("/news", {{"category", category}});
+    auto json_opt = co_await PerformGetAsync("/news", {{"category", category}});
     
     if (!json_opt.has_value() || !json_opt->is_array()) {
-        return {};
+        co_return std::vector<MarketNews>{};
     }
 
     const auto& j = json_opt.value();
@@ -345,24 +379,29 @@ std::vector<MarketNews> FinnhubProvider::GetMarketNews(const std::string& catego
 
             news_list.push_back(n);
         } catch (const std::exception& ex) {
-            Logger::Error("[Finnhub] Failed to parse Market News for category '{}': {}", category, ex.what());
+            Logger::Error(
+                "[Finnhub] Failed to parse Market News for category '{}': {}", 
+                category, ex.what());
         }
     }
-    return news_list;
+    co_return news_list;
 }
 
 bool FinnhubProvider::HasCapability(const CryptoCapability cap) const {
     return crypto_caps_.contains(cap);
 }
 
-std::vector<CryptoPriceCandle> FinnhubProvider::GetCryptoHistory(const std::string& ticker, const Timestamp from, 
-                                                                    const Timestamp to, const TimeFrame interval) {
+boost::asio::awaitable<std::vector<CryptoPriceCandle>> FinnhubProvider::GetCryptoHistory(
+        const std::string& ticker, 
+        const Timestamp from, 
+        const Timestamp to, 
+        const TimeFrame interval) {
     if (!HasCapability(CryptoCapability::History)) {
-        return {};
+        co_return std::vector<CryptoPriceCandle>{};
     }
 
     try {
-        auto stock_candles = GetStockHistory(ticker, from, to, interval);
+        auto stock_candles = co_await GetStockHistory(ticker, from, to, interval);
         
         std::vector<CryptoPriceCandle> crypto_candles;
 
@@ -379,93 +418,119 @@ std::vector<CryptoPriceCandle> FinnhubProvider::GetCryptoHistory(const std::stri
 
             crypto_candles.push_back(cc);
         }
-        return crypto_candles;
+        co_return crypto_candles;
     } catch (const std::exception& ex) {
-        Logger::Error("[Finnhub] Crypto History error: {}", ex.what());
-        return {};
+        Logger::Error(
+            "[Finnhub] Crypto History error: {}", 
+            ex.what());
+        co_return std::vector<CryptoPriceCandle>{};
     }
 }
 
-std::vector<StockSplit> FinnhubProvider::GetStockSplits(const std::string&, const Date, const Date) { 
+boost::asio::awaitable<std::vector<StockSplit>> FinnhubProvider::GetStockSplits(
+        const std::string&, 
+        const Date, 
+        const Date) { 
     if (HasCapability(ProviderCapability::StockSplits)) {
-        Logger::Warn("[Finnhub] Splits enabled but not implemented.");
+        Logger::Warn(
+            "[Finnhub] Splits enabled but not implemented.");
     }
-    return {}; 
+    co_return std::vector<StockSplit>{}; 
 }
 
-std::vector<CompanyFinancialReport> FinnhubProvider::GetFinancialReports(const std::string&) {
+boost::asio::awaitable<std::vector<CompanyFinancialReport>> FinnhubProvider::GetFinancialReports(
+        const std::string&) {
     if (HasCapability(ProviderCapability::FinancialsDeep)) {
-        Logger::Warn("[Finnhub] Deep Financials require premium.");
+        Logger::Warn(
+            "[Finnhub] Deep Financials require premium.");
     }
-    return {}; 
+    co_return std::vector<CompanyFinancialReport>{}; 
 }
 
-std::vector<InsiderTransaction> FinnhubProvider::GetInsiderTransactions(const std::string&, const int) {
+boost::asio::awaitable<std::vector<InsiderTransaction>> FinnhubProvider::GetInsiderTransactions(
+        const std::string&, const int) {
     if (HasCapability(ProviderCapability::Insiders)) {
-        Logger::Warn("[Finnhub] Insiders enabled but not implemented.");
+        Logger::Warn(
+            "[Finnhub] Insiders enabled but not implemented.");
     }
-    return {};
+    co_return std::vector<InsiderTransaction>{};
 }
 
-std::map<std::string, double> FinnhubProvider::GetTechnicalIndicator(const std::string&, const TechIndicatorType, 
-                                                                        const TimeFrame) {
+boost::asio::awaitable<std::map<std::string, double>> FinnhubProvider::GetTechnicalIndicator(
+        const std::string&, 
+        const TechIndicatorType, 
+        const TimeFrame) {
     if (HasCapability(ProviderCapability::TechIndicators)) {
-        Logger::Warn("[Finnhub] TechIndicators enabled but not implemented.");
+        Logger::Warn(
+            "[Finnhub] TechIndicators enabled but not implemented.");
     }
-    return {};
+    co_return std::map<std::string, double>{};
 }
 
-std::vector<CalendarEvent> FinnhubProvider::GetEarningsCalendar(const Date, const Date) {
+boost::asio::awaitable<std::vector<CalendarEvent>> FinnhubProvider::GetEarningsCalendar(
+        const Date, 
+        const Date) {
     if (HasCapability(ProviderCapability::Earnings)) {
-        Logger::Warn("[Finnhub] Earnings enabled but not implemented.");
+        Logger::Warn(
+            "[Finnhub] Earnings enabled but not implemented.");
     }
-    return {};
+    co_return std::vector<CalendarEvent>{};
 }
 
-std::vector<EconomicIndicator> FinnhubProvider::GetMacroIndicator(const MacroIndicatorType) {
+boost::asio::awaitable<std::vector<EconomicIndicator>> FinnhubProvider::GetMacroIndicator(
+        const MacroIndicatorType) {
     if (HasCapability(ProviderCapability::MacroEconomics)) {
-        Logger::Warn("[Finnhub] Macro enabled but not implemented.");
+        Logger::Warn(
+            "[Finnhub] Macro enabled but not implemented.");
     }
-    return {};
+    co_return std::vector<EconomicIndicator>{};
 }
 
-std::optional<double> FinnhubProvider::GetCryptoPrice(const std::string&) { 
+boost::asio::awaitable<std::optional<double>> FinnhubProvider::GetCryptoPrice(const std::string&) { 
     if (HasCapability(CryptoCapability::RealtimePrice)) {
-        Logger::Warn("[Finnhub] CryptoPrice enabled but not implemented.");
+        Logger::Warn(
+            "[Finnhub] CryptoPrice enabled but not implemented.");
     }
-    return std::nullopt; 
+    co_return std::nullopt; 
 }
 
-std::optional<CryptoAsset> FinnhubProvider::GetCryptoAssetInfo(const std::string&) { 
+boost::asio::awaitable<std::optional<CryptoAsset>> FinnhubProvider::GetCryptoAssetInfo(
+        const std::string&) { 
     if (HasCapability(CryptoCapability::Metadata)) {
-        Logger::Warn("[Finnhub] CryptoMeta enabled but not implemented.");
+        Logger::Warn(
+            "[Finnhub] CryptoMeta enabled but not implemented.");
     }
-    return std::nullopt; 
+    co_return std::nullopt; 
 }
 
-std::vector<CryptoAsset> FinnhubProvider::GetCryptoTopList(const int) { 
+boost::asio::awaitable<std::vector<CryptoAsset>> FinnhubProvider::GetCryptoTopList(const int) { 
     if (HasCapability(CryptoCapability::TopList)) {
-        Logger::Warn("[Finnhub] CryptoTopList enabled but not implemented.");
+        Logger::Warn(
+            "[Finnhub] CryptoTopList enabled but not implemented.");
     }
-    return {}; 
+    co_return std::vector<CryptoAsset>{}; 
 }
 
-std::optional<GlobalCryptoMetrics> FinnhubProvider::GetGlobalMetrics() { 
+boost::asio::awaitable<std::optional<GlobalCryptoMetrics>> FinnhubProvider::GetGlobalMetrics() { 
     if (HasCapability(CryptoCapability::GlobalMetrics)) {
-        Logger::Warn("[Finnhub] CryptoGlobal enabled but not implemented.");
+        Logger::Warn(
+            "[Finnhub] CryptoGlobal enabled but not implemented.");
     }
-    return std::nullopt; 
+    co_return std::nullopt; 
 }
 
-std::optional<OrderBook> FinnhubProvider::GetOrderBook(const std::string&, const int) { 
+boost::asio::awaitable<std::optional<OrderBook>> FinnhubProvider::GetOrderBook(
+        const std::string&, 
+        const int) { 
     if (HasCapability(CryptoCapability::OrderBook)) {
-        Logger::Warn("[Finnhub] CryptoBook enabled but not implemented.");
+        Logger::Warn(
+            "[Finnhub] CryptoBook enabled but not implemented.");
     }
-    return std::nullopt; 
+    co_return std::nullopt; 
 }
 
-std::vector<CryptoAsset> FinnhubProvider::SearchAsset(const std::string&) { 
-    return {}; 
+boost::asio::awaitable<std::vector<CryptoAsset>> FinnhubProvider::SearchAsset(const std::string&) { 
+    co_return std::vector<CryptoAsset>{}; 
 }
 
 std::string FinnhubProvider::ConvertInterval(const TimeFrame tf)  {

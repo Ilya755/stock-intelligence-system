@@ -13,32 +13,38 @@ BaseProvider::BaseProvider(std::shared_ptr<IHttpClient> client,
     , rate_limiter_(std::make_unique<RateLimiter>(limits))
     {}
 
-std::optional<nlohmann::json> BaseProvider::PerformGet(const std::string& endpoint, 
-                                                        std::map<std::string, std::string> params) {
+boost::asio::awaitable<std::optional<nlohmann::json>> BaseProvider::PerformGetAsync(
+        const std::string& endpoint, 
+        std::map<std::string, std::string> params) {
     if (!rate_limiter_->TryAcquire()) {
-        Logger::Warn("[BaseProvider] Request to {} blocked by RateLimiter", base_url_);
-        return std::nullopt;
+        Logger::Warn(
+            "[BaseProvider] Request to {} blocked by RateLimiter", 
+            base_url_);
+        co_return std::nullopt;
     }
 
-    std::string full_url = base_url_ + endpoint;
+    const std::string full_url = base_url_ + endpoint;
     
     if (!api_key_.empty()) {
         params["apikey"] = api_key_; 
     }
 
-    HttpResponse response = client_->Get(full_url, params);
+    const HttpResponse response = co_await client_->GetAsync(full_url, params);
 
     if (response.status_code != 200) {
-        Logger::Error("[BaseProvider] API error {} returned code {} with error message {}", full_url, response.status_code, 
-                        response.error_message);
-        return std::nullopt;
+        Logger::Error(
+            "[BaseProvider] API error {} returned code {} with error message {}", 
+            full_url, response.status_code, response.error_message);
+        co_return std::nullopt;
     }
 
     try {
-        return nlohmann::json::parse(response.text);
+        co_return nlohmann::json::parse(response.text);
     } catch (const std::exception& ex) {
-        Logger::Error("[BaseProvider] JSON parsing rrror {}", ex.what());
-        return std::nullopt;
+        Logger::Error(
+            "[BaseProvider] JSON parsing error {}", 
+            ex.what());
+        co_return std::nullopt;
     }
 }
 

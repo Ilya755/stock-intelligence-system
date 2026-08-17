@@ -15,7 +15,9 @@ CoinGeckoProvider::CoinGeckoProvider(std::shared_ptr<IHttpClient> client,
             if (crypto_cap.has_value()) {
                 crypto_caps_.insert(crypto_cap.value());
             } else {
-                Logger::Warn("[CoinGecko] Unknown capability '{}' in config", s);
+                Logger::Warn(
+                    "[CoinGecko] Unknown capability '{}' in config", 
+                    s);
             }
         }
     }
@@ -28,38 +30,42 @@ bool CoinGeckoProvider::HasCapability(const CryptoCapability cap) const {
     return crypto_caps_.contains(cap);
 }
 
-std::optional<double> CoinGeckoProvider::GetCryptoPrice(const std::string& ticker) { // ticker - name of asset
+boost::asio::awaitable<std::optional<double>> CoinGeckoProvider::GetCryptoPrice(
+        const std::string& ticker) { // ticker - name of asset
     if (!HasCapability(CryptoCapability::RealtimePrice)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformGet("/simple/price", {
+    auto json_opt = co_await PerformGetAsync("/simple/price", {
                                 {"ids", ticker},
                                 {"vs_currencies", "usd"}
                             });
     
     if (!json_opt.has_value() || !json_opt->contains(ticker)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     try {
         const auto& item = (json_opt.value())[ticker];
         if (item.contains("usd")) {
-            return item["usd"].get<double>();
+            co_return item["usd"].get<double>();
         }
-        return std::nullopt;
+        co_return std::nullopt;
     } catch (const std::exception& ex) {
-        Logger::Error("[CoinGecko] Parse Price Error for {}: {}", ticker, ex.what());
-        return std::nullopt;
+        Logger::Error(
+            "[CoinGecko] Parse Price Error for {}: {}", 
+            ticker, ex.what());
+        co_return std::nullopt;
     }
 }
 
-std::optional<CryptoAsset> CoinGeckoProvider::GetCryptoAssetInfo(const std::string& ticker) {  // ticker - name of asset
+boost::asio::awaitable<std::optional<CryptoAsset>> CoinGeckoProvider::GetCryptoAssetInfo(
+        const std::string& ticker) {  // ticker - name of asset
     if (!HasCapability(CryptoCapability::Metadata)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformGet("/coins/" + ticker, {
+    auto json_opt = co_await PerformGetAsync("/coins/" + ticker, {
                                 {"localization", "false"},
                                 {"tickers", "false"},
                                 {"market_data", "false"},
@@ -68,7 +74,7 @@ std::optional<CryptoAsset> CoinGeckoProvider::GetCryptoAssetInfo(const std::stri
                             });
 
     if (!json_opt.has_value() || json_opt->empty()) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     try {
@@ -79,19 +85,21 @@ std::optional<CryptoAsset> CoinGeckoProvider::GetCryptoAssetInfo(const std::stri
         asset.ticker = j.value("symbol", ""); 
         asset.name = j.value("name", "");
         
-        return asset;
+        co_return asset;
     } catch (const std::exception& ex) {
-        Logger::Error("[CoinGecko] Parse AssetInfo Error for {}: {}", ticker, ex.what());
-        return std::nullopt;
+        Logger::Error(
+            "[CoinGecko] Parse AssetInfo Error for {}: {}", 
+            ticker, ex.what());
+        co_return std::nullopt;
     }
 }
 
-std::vector<CryptoAsset> CoinGeckoProvider::GetCryptoTopList(const int limit) {
+boost::asio::awaitable<std::vector<CryptoAsset>> CoinGeckoProvider::GetCryptoTopList(const int limit) {
     if (!HasCapability(CryptoCapability::TopList)) {
-        return {};
+        co_return std::vector<CryptoAsset>{};
     }
 
-    auto json_opt = PerformGet("/coins/markets", {
+    auto json_opt = co_await PerformGetAsync("/coins/markets", {
                                 {"vs_currency", "usd"},
                                 {"order", "market_cap_desc"},
                                 {"per_page", std::to_string(limit)},
@@ -100,7 +108,7 @@ std::vector<CryptoAsset> CoinGeckoProvider::GetCryptoTopList(const int limit) {
                             });
     
     if (!json_opt.has_value() || !json_opt->is_array()) {
-        return {};
+        co_return std::vector<CryptoAsset>{};
     }
 
     std::vector<CryptoAsset> results;
@@ -117,29 +125,33 @@ std::vector<CryptoAsset> CoinGeckoProvider::GetCryptoTopList(const int limit) {
             results.push_back(asset);
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[CoinGecko] TopList Parse Error: {}", ex.what());
+        Logger::Error(
+            "[CoinGecko] TopList Parse Error: {}", 
+            ex.what());
     }
-    return results;
+    co_return results;
 }
 
-std::vector<CryptoPriceCandle> CoinGeckoProvider::GetCryptoHistory(const std::string& ticker, 
-                                                                    const Timestamp from, const Timestamp to, 
-                                                                    const TimeFrame interval) {
+boost::asio::awaitable<std::vector<CryptoPriceCandle>> CoinGeckoProvider::GetCryptoHistory(
+        const std::string& ticker, 
+        const Timestamp from, 
+        const Timestamp to, 
+        const TimeFrame interval) {
     if (!HasCapability(CryptoCapability::History)) {
-        return {};
+        co_return std::vector<CryptoPriceCandle>{};
     }
 
     long long from_ts = std::chrono::duration_cast<std::chrono::seconds>(from.time_since_epoch()).count();
     long long to_ts = std::chrono::duration_cast<std::chrono::seconds>(to.time_since_epoch()).count();
 
-    auto json_opt = PerformGet("/coins/" + ticker + "/market_chart/range", {
+    auto json_opt = co_await PerformGetAsync("/coins/" + ticker + "/market_chart/range", {
                                     {"vs_currency", "usd"},
                                     {"from", std::to_string(from_ts)},
                                     {"to", std::to_string(to_ts)}
                                 });
 
     if (!json_opt.has_value() || !json_opt->contains("prices")) {
-        return {};
+        co_return std::vector<CryptoPriceCandle>{};
     }
 
     std::vector<CryptoPriceCandle> results;
@@ -179,20 +191,22 @@ std::vector<CryptoPriceCandle> CoinGeckoProvider::GetCryptoHistory(const std::st
             results.push_back(c);
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[CoinGecko] History Parse Error for {}: {}", ticker, ex.what());
+        Logger::Error(
+            "[CoinGecko] History Parse Error for {}: {}",
+            ticker, ex.what());
     }
-    return results;
+    co_return results;
 }
 
-std::vector<CryptoAsset> CoinGeckoProvider::SearchAsset(const std::string& query) {
+boost::asio::awaitable<std::vector<CryptoAsset>> CoinGeckoProvider::SearchAsset(const std::string& query) {
     if (!HasCapability(CryptoCapability::Metadata) && !HasCapability(CryptoCapability::TopList)) {
-        return {};
+        co_return std::vector<CryptoAsset>{};
     }
 
-    auto json_opt = PerformGet("/search", {{"query", query}});
+    auto json_opt = co_await PerformGetAsync("/search", {{"query", query}});
     
     if (!json_opt.has_value() || !json_opt->contains("coins")) {
-        return {};
+        co_return std::vector<CryptoAsset>{};
     }
 
     std::vector<CryptoAsset> results;
@@ -200,7 +214,7 @@ std::vector<CryptoAsset> CoinGeckoProvider::SearchAsset(const std::string& query
         const auto& coins = (json_opt.value())["coins"];
         
         if (!coins.is_array()) {
-            return {};
+            co_return std::vector<CryptoAsset>{};
         }
 
         results.reserve(coins.size());
@@ -213,21 +227,23 @@ std::vector<CryptoAsset> CoinGeckoProvider::SearchAsset(const std::string& query
             results.push_back(asset);    
         }
     } catch (const std::exception& ex) {
-            Logger::Error("[CoinGecko] Search Parse Error: {}", ex.what());
+        Logger::Error(
+            "[CoinGecko] Search Parse Error: {}", 
+            ex.what());
     }
-    return results;
+    co_return results;
 }
 
 
-std::optional<GlobalCryptoMetrics> CoinGeckoProvider::GetGlobalMetrics() {
+boost::asio::awaitable<std::optional<GlobalCryptoMetrics>> CoinGeckoProvider::GetGlobalMetrics() {
     if (!HasCapability(CryptoCapability::GlobalMetrics)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformGet("/global");
+    auto json_opt = co_await PerformGetAsync("/global");
     
     if (!json_opt.has_value() || !json_opt->contains("data")) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     try {
@@ -254,16 +270,19 @@ std::optional<GlobalCryptoMetrics> CoinGeckoProvider::GetGlobalMetrics() {
 
         m.active_cryptocurrencies = data.value("active_cryptocurrencies", 0);
 
-        return m;
+        co_return m;
     } catch (const std::exception& ex) {
-        Logger::Error("[CoinGecko] GlobalMetrics Parse Error: {}", ex.what());
-        return std::nullopt;
+        Logger::Error(
+            "[CoinGecko] GlobalMetrics Parse Error: {}", 
+            ex.what());
+        co_return std::nullopt;
     }
 }
 
-std::optional<OrderBook> CoinGeckoProvider::GetOrderBook(const std::string&, const int) {
+boost::asio::awaitable<std::optional<OrderBook>> CoinGeckoProvider::GetOrderBook(const std::string&, const int) {
     if (HasCapability(CryptoCapability::OrderBook)) {
-        Logger::Warn("[CoinGecko] OrderBook capability is set but not supported via REST API");
+        Logger::Warn(
+            "[CoinGecko] OrderBook capability is set but not supported via REST API");
     }
-    return std::nullopt;
+    co_return std::nullopt;
 }

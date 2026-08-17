@@ -15,11 +15,16 @@ void Logger::InitConsole(const std::string& pattern) {
     logger->set_level(spdlog::level::info);
     spdlog::set_default_logger(logger);
 
-    Logger::Info("[Logger] Console logger initialized!");
+    Logger::Info(
+        "[Logger] Console logger initialized!");
 }
 
-void Logger::InitFile(const std::string& path, const std::string& level_str,
-                        size_t max_size, size_t max_files, const std::string& pattern) {
+void Logger::InitFile(
+        const std::string& path, 
+        const std::string& level_str,
+        size_t max_size, 
+        size_t max_files, 
+        const std::string& pattern) {
     auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
 
     console_sink->set_color(spdlog::level::info, "\033[1;32m");
@@ -42,7 +47,9 @@ void Logger::InitFile(const std::string& path, const std::string& level_str,
 
     spdlog::set_default_logger(logger);
 
-    Logger::Info("[Logger] Logger initialized with rotation. Max size: {} bytes, max files: {}", max_size, max_files);
+    Logger::Info(
+        "[Logger] Logger initialized with rotation. Max size: {} bytes, max files: {}", 
+        max_size, max_files);
 }
 
 spdlog::level::level_enum Logger::ParseLevel(const std::string& level_str) {

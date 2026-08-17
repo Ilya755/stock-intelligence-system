@@ -197,7 +197,8 @@
         "host": "postgres_db", 
         "port" : 5432,
         "username": "admin",
-        "password": "change_me_in_production"
+        "password": "change_me_in_production",
+        "pool_size": 4
     }, 
     "logger" : {
         "logs_path" : "/app/logs" 

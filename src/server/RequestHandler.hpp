@@ -8,6 +8,7 @@
 #include <exception>
 #include <algorithm>
 
+#include "boost/asio/awaitable.hpp"
 #include "nlohmann/json.hpp"
 
 #include "../domain/Entities.hpp"
@@ -19,7 +20,7 @@ class RequestHandler {
 public:
     explicit RequestHandler(std::shared_ptr<MarketService> service);
 
-    std::string HandleRequest(const std::string& request_str);
+    boost::asio::awaitable<std::string> HandleRequest(const std::string& request_str);
 
 private:
     std::shared_ptr<MarketService> service_;

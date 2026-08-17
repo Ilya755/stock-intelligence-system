@@ -2,8 +2,9 @@
 
 #include <vector>
 #include <string>
-#include <tuple>
 #include <optional>
+
+#include "boost/asio/awaitable.hpp"
 
 #include "../domain/Entities.hpp"
 #include "Database.hpp"
@@ -12,29 +13,36 @@ class CryptoRepository {
 public:
     explicit CryptoRepository(Database& db);
 
-    void SaveCryptoAsset(const CryptoAsset& crypto_asset);
+    boost::asio::awaitable<void> SaveCryptoAssetAsync(CryptoAsset crypto_asset);
 
-    void SaveCryptoAssetsBatch(const std::vector<CryptoAsset>& crypto_assets);
+    boost::asio::awaitable<void> SaveCryptoAssetsBatchAsync(std::vector<CryptoAsset> crypto_assets);
 
-    void SaveCryptoPrice(const int asset_id, const CryptoPriceCandle& crypto_price);
+    boost::asio::awaitable<void> SaveCryptoPriceAsync(
+        int asset_id, 
+        CryptoPriceCandle crypto_price);
 
-    void SaveCryptoPricesBatch(const int asset_id, const std::vector<CryptoPriceCandle>& prices);
+    boost::asio::awaitable<void> SaveCryptoPricesBatchAsync(
+        int asset_id, 
+        std::vector<CryptoPriceCandle> prices);
 
-    std::optional<int> GetCryptoAssetId(const std::string& ticker);
+    boost::asio::awaitable<std::optional<int>> GetCryptoAssetIdAsync(std::string ticker);
 
-    std::optional<CryptoAsset> GetCryptoAssetByTicker(const std::string& ticker);
+    boost::asio::awaitable<std::optional<CryptoAsset>> GetCryptoAssetByTickerAsync(std::string ticker);
 
-    std::vector<CryptoAsset> GetAllCryptoAssets();
+    boost::asio::awaitable<std::vector<CryptoAsset>> GetAllCryptoAssetsAsync();
 
-    std::optional<CryptoPriceCandle> GetLastCryptoPrice(int asset_id);
+    boost::asio::awaitable<std::optional<CryptoPriceCandle>> GetLastCryptoPriceAsync(int asset_id);
 
-    std::vector<CryptoPriceCandle> GetCryptoPricesHistory(int asset_id, const Timestamp from, const Timestamp to);
+    boost::asio::awaitable<std::vector<CryptoPriceCandle>> GetCryptoPricesHistoryAsync(
+        int asset_id,
+        Timestamp from, 
+        Timestamp to);
 
-    void UpdateCryptoAssetName(int id, const std::string& new_name);
+    boost::asio::awaitable<void> UpdateCryptoAssetNameAsync(int id, std::string new_name);
 
-    void DeleteCryptoAsset(int id);
+    boost::asio::awaitable<void> DeleteCryptoAssetAsync(int id);
 
-    void DeleteOldCryptoPrices(int asset_id, const Timestamp older_than);
+    boost::asio::awaitable<void> DeleteOldCryptoPricesAsync(int asset_id, Timestamp older_than);
 
 private:
     Database& db_;

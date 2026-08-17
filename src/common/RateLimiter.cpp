@@ -19,11 +19,15 @@ bool RateLimiter::TryAcquire() {
     UpdateWindows();
 
     if (max_per_minute_ > 0 && current_minute_count_ == max_per_minute_) {
-        Logger::Warn("[RateLimiter] Minute limit hit: {}/{}", current_minute_count_, max_per_minute_);
+        Logger::Warn(
+            "[RateLimiter] Minute limit hit: {}/{}", 
+            current_minute_count_, max_per_minute_);
         return false;
     }
     if (max_per_day_ > 0 && current_day_count_ == max_per_day_) {
-        Logger::Warn("[RateLimiter] Daily limit hit: {}/{}", current_day_count_, max_per_day_);
+        Logger::Warn(
+            "[RateLimiter] Daily limit hit: {}/{}", 
+            current_day_count_, max_per_day_);
         return false;
     }
 
@@ -44,7 +48,8 @@ void RateLimiter::UpdateWindows() {
     auto today = std::chrono::floor<std::chrono::days>(std::chrono::system_clock::now());
 
     if (today != last_day_start_) {
-        Logger::Info("[RateLimiter] New UTC day detected. Resetting daily counters.");
+        Logger::Info(
+            "[RateLimiter] New UTC day detected. Resetting daily counters.");
         current_day_count_ = 0;
         last_day_start_ = today;
     }

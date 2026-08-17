@@ -15,7 +15,9 @@ FmpProvider::FmpProvider(std::shared_ptr<IHttpClient> client,
             if (stock_cap.has_value()) {
                 stock_caps_.insert(stock_cap.value());
             } else {
-                Logger::Warn("[FMP] Unknown capability '{}' in config", s);
+                Logger::Warn(
+                    "[FMP] Unknown capability '{}' in config", 
+                    s);
             }
         }
     }
@@ -28,39 +30,41 @@ bool FmpProvider::HasCapability(const ProviderCapability cap) const {
     return stock_caps_.contains(cap);
 }
 
-int FmpProvider::GetRemainingRequests() const { return -1; } // ToDo
+boost::asio::awaitable<int> FmpProvider::GetRemainingRequests() const { co_return -1; } // ToDo
 
-std::optional<double> FmpProvider::GetStockPrice(const std::string& ticker) {
+boost::asio::awaitable<std::optional<double>> FmpProvider::GetStockPrice(const std::string& ticker) {
     if (!HasCapability(ProviderCapability::PriceRealtime)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformGet("/quote/" + ticker);
+    auto json_opt = co_await PerformGetAsync("/quote/" + ticker);
     
     if (!json_opt.has_value() || json_opt->empty()) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     try {
-        return (json_opt.value())[0]["price"].get<double>();
+        co_return (json_opt.value())[0]["price"].get<double>();
     } catch (const std::exception& ex) {
-        Logger::Error("[FMP] CurrentPrice parse error for {}: {}", ticker, ex.what());
-        return std::nullopt;
+        Logger::Error(
+            "[FMP] CurrentPrice parse error for {}: {}", 
+            ticker, ex.what());
+        co_return std::nullopt;
     }
 }
 
-std::vector<StockPriceCandle> FmpProvider::GetStockHistory(const std::string& ticker, 
+boost::asio::awaitable<std::vector<StockPriceCandle>> FmpProvider::GetStockHistory(const std::string& ticker, 
                                                             const Timestamp from, const Timestamp to, 
                                                             const TimeFrame interval) {
     if (interval == TimeFrame::Daily && !HasCapability(ProviderCapability::PriceDaily)) {
-        return {};
+        co_return std::vector<StockPriceCandle>{};
     } else if ((interval == TimeFrame::Minute1 || interval == TimeFrame::Minute5 || 
             interval == TimeFrame::Minute15 || interval == TimeFrame::Hourly) && 
             !HasCapability(ProviderCapability::PriceIntraday)) {
-        return {};
+        co_return std::vector<StockPriceCandle>{};
     } else if (interval == TimeFrame::Weekly || interval == TimeFrame::Monthly && 
                     !HasCapability(ProviderCapability::PriceHistoryDeep)) {
-        return {};
+        co_return std::vector<StockPriceCandle>{};
     }
 
 
@@ -71,8 +75,10 @@ std::vector<StockPriceCandle> FmpProvider::GetStockHistory(const std::string& ti
     } else {
         std::string interval_str = ConvertInterval(interval);
         if (interval_str.empty()) {
-            Logger::Warn("[FMP] Interval {} not supported.", ConvertInterval(interval));
-            return {};
+            Logger::Warn(
+                "[FMP] Interval {} not supported.", 
+                ConvertInterval(interval));
+            co_return std::vector<StockPriceCandle>{};
         }
         endpoint = "/historical-chart/" + interval_str + "/" + ticker;
     }
@@ -82,10 +88,10 @@ std::vector<StockPriceCandle> FmpProvider::GetStockHistory(const std::string& ti
         {"to", TimeUtils::DateToString(Date(std::chrono::floor<std::chrono::days>(to)))}
     };
 
-    auto json_opt = PerformGet(endpoint, params);
+    auto json_opt = co_await PerformGetAsync(endpoint, params);
 
     if (!json_opt.has_value()) {
-        return {};
+        co_return std::vector<StockPriceCandle>{};
     }
 
     std::vector<StockPriceCandle> results;
@@ -95,7 +101,7 @@ std::vector<StockPriceCandle> FmpProvider::GetStockHistory(const std::string& ti
         const auto& data = j.contains("historical") ? j["historical"] : j;
         
         if (!data.is_array()) {
-            return {};
+            co_return std::vector<StockPriceCandle>{};
         }
         
         results.reserve(data.size());
@@ -112,22 +118,24 @@ std::vector<StockPriceCandle> FmpProvider::GetStockHistory(const std::string& ti
             results.push_back(c);
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[FMP] History data processing error for {}: {}", ticker, ex.what());
+        Logger::Error(
+            "[FMP] History data processing error for {}: {}", 
+            ticker, ex.what());
     }
 
     std::reverse(results.begin(), results.end()); 
-    return results;
+    co_return results;
 }
 
-std::optional<CompanyFullInfo> FmpProvider::GetCompanyProfile(const std::string& ticker) {
+boost::asio::awaitable<std::optional<CompanyFullInfo>> FmpProvider::GetCompanyProfile(const std::string& ticker) {
     if (!HasCapability(ProviderCapability::CompanyProfile)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformGet("/profile/" + ticker);
+    auto json_opt = co_await PerformGetAsync("/profile/" + ticker);
     
     if (!json_opt.has_value() || json_opt->empty()){
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     try {
@@ -144,22 +152,24 @@ std::optional<CompanyFullInfo> FmpProvider::GetCompanyProfile(const std::string&
         info.country = j.value("country", "");
         info.updated_at = std::chrono::system_clock::now(); 
 
-        return info;
+        co_return info;
     } catch (const std::exception& ex) {
-        Logger::Error("[FMP] CompanyProfile Parse Error for {}: {}", ticker, ex.what());
-        return std::nullopt; 
+        Logger::Error(
+            "[FMP] CompanyProfile Parse Error for {}: {}", 
+            ticker, ex.what());
+        co_return std::nullopt; 
     }
 }
 
-std::vector<CompanyFinancialReport> FmpProvider::GetFinancialReports(const std::string& ticker) {
+boost::asio::awaitable<std::vector<CompanyFinancialReport>> FmpProvider::GetFinancialReports(const std::string& ticker) {
     if (!HasCapability(ProviderCapability::FinancialsDeep)) {
-        return {};
+        co_return std::vector<CompanyFinancialReport>{};
     }
 
-    auto json_opt = PerformGet("/income-statement/" + ticker, {{"limit", "10"}});
+    auto json_opt = co_await PerformGetAsync("/income-statement/" + ticker, {{"limit", "10"}});
 
     if (!json_opt.has_value()) {
-        return {};
+        co_return std::vector<CompanyFinancialReport>{};
     }
 
     std::vector<CompanyFinancialReport> reports;
@@ -167,7 +177,7 @@ std::vector<CompanyFinancialReport> FmpProvider::GetFinancialReports(const std::
         const auto& data = json_opt.value();
         
         if (!data.is_array()) {
-            return {};
+            co_return std::vector<CompanyFinancialReport>{};
         }
         
         reports.reserve(data.size());
@@ -187,22 +197,24 @@ std::vector<CompanyFinancialReport> FmpProvider::GetFinancialReports(const std::
             reports.push_back(r);
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[FMP] Financials error for {}: {}", ticker, ex.what());
+        Logger::Error(
+            "[FMP] Financials error for {}: {}", 
+            ticker, ex.what());
     }
-    return reports;
+    co_return reports;
 }
 
-std::vector<StockDividends> FmpProvider::GetDividends(const std::string& ticker, 
+boost::asio::awaitable<std::vector<StockDividends>> FmpProvider::GetDividends(const std::string& ticker, 
                                                         const Date from, const Date to) {
     if (!HasCapability(ProviderCapability::Dividends)) {
-        return {};
+        co_return std::vector<StockDividends>{};
     }
 
-    auto json_opt = PerformGet("/historical-price-full/stock_dividend/" + ticker);
+    auto json_opt = co_await PerformGetAsync("/historical-price-full/stock_dividend/" + ticker);
 
     if (!json_opt.has_value() || !json_opt->contains("historical") || 
             !(json_opt.value())["historical"].is_array()) {
-        return {};
+        co_return std::vector<StockDividends>{};
     }
 
     std::vector<StockDividends> result;
@@ -210,7 +222,7 @@ std::vector<StockDividends> FmpProvider::GetDividends(const std::string& ticker,
         const auto& historical = (json_opt.value())["historical"];
 
         if (!historical.is_array()) {
-            return {};
+            co_return std::vector<StockDividends>{};
         }
 
         result.reserve(historical.size());
@@ -231,22 +243,24 @@ std::vector<StockDividends> FmpProvider::GetDividends(const std::string& ticker,
             result.push_back(div);
         }
     } catch (const std::exception& ex) { 
-        Logger::Error("[FMP] Failed to parse Dividends for {}: {}", ticker, ex.what());
+        Logger::Error(
+            "[FMP] Failed to parse Dividends for {}: {}", 
+            ticker, ex.what());
     }
-    return result;
+    co_return result;
 }
 
-std::vector<StockSplit> FmpProvider::GetStockSplits(const std::string& ticker, 
+boost::asio::awaitable<std::vector<StockSplit>> FmpProvider::GetStockSplits(const std::string& ticker, 
                                                         const Date from, const Date to) {
     if (!HasCapability(ProviderCapability::StockSplits)) {
-        return {};
+        co_return std::vector<StockSplit>{};
     }
 
-    auto json_opt = PerformGet("/historical-price-full/stock_split/" + ticker);
+    auto json_opt = co_await PerformGetAsync("/historical-price-full/stock_split/" + ticker);
 
     if (!json_opt.has_value() || !json_opt->contains("historical") || 
             !(json_opt.value())["historical"].is_array()) {
-        return {};
+        co_return std::vector<StockSplit>{};
     }
 
     const auto& historical = (json_opt.value())["historical"];
@@ -268,19 +282,20 @@ std::vector<StockSplit> FmpProvider::GetStockSplits(const std::string& ticker,
             split.denominator = item["denominator"].get<double>();
             result.push_back(split);
         } catch (const std::exception& ex) {
-            Logger::Warn("[FMP] Failed to parse Stock Split item for {}: {}. JSON segment: {}", 
-                            ticker, ex.what(), item.dump());
+            Logger::Warn(
+                "[FMP] Failed to parse Stock Split item for {}: {}. JSON segment: {}", 
+                ticker, ex.what(), item.dump());
             continue;
         }
     }
-    return result;
+    co_return result;
 }
 
-std::vector<TickerSearchResult> FmpProvider::SearchStockTicker(const std::string& ticker) {
-    auto json_opt = PerformGet("/search", {{"query", ticker}, {"limit", "10"}});
+boost::asio::awaitable<std::vector<TickerSearchResult>> FmpProvider::SearchStockTicker(const std::string& ticker) {
+    auto json_opt = co_await PerformGetAsync("/search", {{"query", ticker}, {"limit", "10"}});
 
     if (!json_opt.has_value() || !json_opt->is_array()) {
-        return {};
+        co_return std::vector<TickerSearchResult>{};
     }
 
     std::vector<TickerSearchResult> results;
@@ -299,59 +314,68 @@ std::vector<TickerSearchResult> FmpProvider::SearchStockTicker(const std::string
             results.push_back(res);
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[FMP] Search parse error: {}", ex.what());
+        Logger::Error(
+            "[FMP] Search parse error: {}", 
+            ex.what());
     }
-    return results;
+    co_return results;
 }
 
-std::vector<InsiderTransaction> FmpProvider::GetInsiderTransactions(const std::string&, const int) {
+boost::asio::awaitable<std::vector<InsiderTransaction>> FmpProvider::GetInsiderTransactions(const std::string&, const int) {
     if (HasCapability(ProviderCapability::Insiders)) {
-        Logger::Warn("[FMP] Insiders not implemented.");
+        Logger::Warn(
+            "[FMP] Insiders not implemented.");
     }
-    return {};
+    co_return std::vector<InsiderTransaction>{};
 }
 
-std::optional<AnalystRating> FmpProvider::GetAnalystRatings(const std::string&) {
+boost::asio::awaitable<std::optional<AnalystRating>> FmpProvider::GetAnalystRatings(const std::string&) {
     if (HasCapability(ProviderCapability::AnalystRatings)) {
-        Logger::Warn("[FMP] Ratings not implemented.");
+        Logger::Warn(
+            "[FMP] Ratings not implemented.");
     }
-    return std::nullopt;
+    co_return std::nullopt;
 }
 
-std::map<std::string, double> FmpProvider::GetTechnicalIndicator(const std::string&, const TechIndicatorType, 
+boost::asio::awaitable<std::map<std::string, double>> FmpProvider::GetTechnicalIndicator(const std::string&, const TechIndicatorType, 
                                                                     const TimeFrame) {
     if (HasCapability(ProviderCapability::TechIndicators)) {
-        Logger::Warn("[FMP] TechIndicators not implemented.");
+        Logger::Warn(
+            "[FMP] TechIndicators not implemented.");
     }
-    return {};
+    co_return std::map<std::string, double>{};
 }
 
-std::vector<MarketNews> FmpProvider::GetCompanyNews(const std::string&, const int) {
+boost::asio::awaitable<std::vector<MarketNews>> FmpProvider::GetCompanyNews(const std::string&, const int) {
     if (HasCapability(ProviderCapability::News)) {
-        Logger::Warn("[FMP] News not implemented.");
+        Logger::Warn(
+            "[FMP] News not implemented.");
     }
-    return {};
+    co_return std::vector<MarketNews>{};
 }
 
-std::vector<MarketNews> FmpProvider::GetMarketNews(const std::string&, const int) {
+boost::asio::awaitable<std::vector<MarketNews>> FmpProvider::GetMarketNews(const std::string&, const int) {
     if (HasCapability(ProviderCapability::News)) {
-        Logger::Warn("[FMP] News not implemented.");
+        Logger::Warn(
+            "[FMP] News not implemented.");
     }
-    return {};
+    co_return std::vector<MarketNews>{};
 }
 
-std::vector<CalendarEvent> FmpProvider::GetEarningsCalendar(const Date, const Date) {
+boost::asio::awaitable<std::vector<CalendarEvent>> FmpProvider::GetEarningsCalendar(const Date, const Date) {
     if (HasCapability(ProviderCapability::Earnings)) {
-        Logger::Warn("[FMP] Earnings not implemented.");
+        Logger::Warn(
+            "[FMP] Earnings not implemented.");
     }
-    return {};
+    co_return std::vector<CalendarEvent>{};
 }
 
-std::vector<EconomicIndicator> FmpProvider::GetMacroIndicator(const MacroIndicatorType) {
+boost::asio::awaitable<std::vector<EconomicIndicator>> FmpProvider::GetMacroIndicator(const MacroIndicatorType) {
     if (HasCapability(ProviderCapability::MacroEconomics)) {
-        Logger::Warn("[FMP] Macro not implemented.");
+        Logger::Warn(
+            "[FMP] Macro not implemented.");
     }
-    return {};
+    co_return std::vector<EconomicIndicator>{};
 }
 
 std::string FmpProvider::ConvertInterval(const TimeFrame tf) {

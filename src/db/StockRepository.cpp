@@ -1,692 +1,720 @@
 #include "StockRepository.hpp"
 
-#include "pqxx/pqxx"
+#include <format>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+#include "nlohmann/json.hpp"
 
 #include "../common/TimeUtils.hpp"
 #include "../common/Logger.hpp"
+
+namespace {
+
+std::string Text(const PgResult& result, int row, int column) {
+    return std::string(result.Value(row, column));
+}
+
+PgParam Param(int value) {
+    return std::to_string(value);
+}
+
+PgParam Param(long long value) {
+    return std::to_string(value);
+}
+
+PgParam Param(double value) {
+    return std::format("{}", value);
+}
+
+PgParam Param(std::string value) {
+    return value;
+}
+
+nlohmann::json OptionalText(const std::optional<std::string>& value) {
+    return value.has_value() ? nlohmann::json(*value) : nlohmann::json(nullptr);
+}
+
+}
 
 StockRepository::StockRepository(Database& db)
     : db_(db)
     {}
 
-void StockRepository::SaveCompany(const CompanyFullInfo& company) {
+boost::asio::awaitable<void> StockRepository::SaveCompanyAsync(CompanyFullInfo company) {
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec_params(
-            "INSERT INTO companies(ticker, name, country, "
-            "sector, industry, currency, description, exchange) "
+        co_await db_.Query(
+            "INSERT INTO companies(ticker, name, country, sector, "
+            "industry, currency, description, exchange) "
             "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) "
             "ON CONFLICT (ticker, exchange) DO UPDATE "
             "SET name = EXCLUDED.name, country = EXCLUDED.country, "
             "sector = EXCLUDED.sector, industry = EXCLUDED.industry, "
             "description = EXCLUDED.description, updated_at = NOW()",
-            company.ticker, company.name, company.country.value_or(""),
-            company.sector.value_or(""), company.industry.value_or(""), 
-            company.currency, company.description.value_or(""), 
-            company.exchange
-        );
+            {
+                Param(company.ticker),
+                Param(company.name),
+                Param(company.country.value_or("")),
+                Param(company.sector.value_or("")),
+                Param(company.industry.value_or("")),
+                Param(company.currency),
+                Param(company.description.value_or("")),
+                Param(company.exchange)
+            });
 
-        txn.commit();
-        Logger::Debug("[StockRepository] Company saved: {}", company.ticker);
+        Logger::Debug(
+            "[StockRepository] Company saved: {}", 
+            company.ticker);
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Failed to save company {}: {}", 
-                        company.ticker, ex.what());
+        Logger::Error(
+            "[StockRepository] Failed to save company {}: {}", 
+            company.ticker, ex.what());
     }
 }
 
-void StockRepository::SaveCompaniesBatch(const std::vector<CompanyFullInfo>& companies) {
+boost::asio::awaitable<void> StockRepository::SaveCompaniesBatchAsync(
+        std::vector<CompanyFullInfo> companies) {
+    if (companies.empty()) {
+        co_return;
+    }
+
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-        
-        txn.exec(
-            "CREATE TEMP TABLE temp_companies ON COMMIT DROP AS "
-            "SELECT ticker, name, country, sector, industry, currency, description, exchange, updated_at "
-            "FROM companies "
-            "LIMIT 0"
-        );
-
-        auto stream = pqxx::stream_to::table(
-                            txn,
-                            {"temp_companies"},
-                            {"ticker", "name", "country", "sector", "industry",
-                                "currency", "description", "exchange", "updated_at"}
-                        );
-        
-        for (const auto& comp : companies) {
-            stream << std::make_tuple(comp.ticker, comp.name, comp.country, comp.sector,
-                                        comp.industry, comp.currency, comp.description, comp.exchange, 
-                                        TimeUtils::TimestampToString(comp.updated_at));
+        nlohmann::json rows = nlohmann::json::array();
+        for (const auto& company : companies) {
+            rows.push_back({
+                {"ticker", company.ticker},
+                {"name", company.name},
+                {"country", OptionalText(company.country)},
+                {"sector", OptionalText(company.sector)},
+                {"industry", OptionalText(company.industry)},
+                {"currency", company.currency},
+                {"description", OptionalText(company.description)},
+                {"exchange", company.exchange},
+                {"updated_at", TimeUtils::TimestampToString(company.updated_at)}
+            });
         }
 
-        stream.complete();
-
-        txn.exec(
-            "INSERT INTO companies(ticker, name, country, sector, industry, currency, "
-            "description, exchange, updated_at) "
-            "SELECT * FROM temp_companies "
+        co_await db_.Query(
+            "INSERT INTO companies(ticker, name, country, sector, "
+            "industry, currency, description, exchange, updated_at) "
+            "SELECT ticker, name, country, sector, industry, "
+            "currency, description, exchange, updated_at "
+            "FROM jsonb_to_recordset($1::jsonb) "
+            "AS x(ticker text, name text, country text, sector text, industry text, "
+            "currency text, description text, exchange text, updated_at timestamp) "
             "ON CONFLICT (ticker, exchange) DO UPDATE "
             "SET name = EXCLUDED.name, country = EXCLUDED.country, "
             "sector = EXCLUDED.sector, industry = EXCLUDED.industry, "
-            "description = EXCLUDED.description, updated_at = NOW()"
-        );
+            "description = EXCLUDED.description, updated_at = NOW()",
+            {Param(rows.dump())});
 
-        txn.commit();
-        Logger::Debug("[StockRepository] Batch insert companies completed");
+        Logger::Debug(
+            "[StockRepository] Batch insert companies completed");
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Batch insert companies failed: {}", ex.what());
+        Logger::Error(
+            "[StockRepository] Batch insert companies failed: {}", 
+            ex.what());
     }
 }
 
-void StockRepository::SaveCompanyFinancialReport(const int company_id, 
-                                                    const CompanyFinancialReport& fin_rep) {
+boost::asio::awaitable<void> StockRepository::SaveCompanyFinancialReportAsync(
+        int company_id, 
+        CompanyFinancialReport report) {
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec_params(
-            "INSERT INTO companies_financial_reports(company_id, " 
-            "period_date, report_type, currency, revenue, net_income, "
-            "total_debt, equity) "
+        co_await db_.Query(
+            "INSERT INTO companies_financial_reports(company_id, period_date, "
+            "report_type, currency, revenue, net_income, total_debt, equity) "
             "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) "
             "ON CONFLICT (company_id, period_date, report_type) DO NOTHING",
-            company_id, TimeUtils::DateToString(fin_rep.period_date), 
-            ReportTypeToString(fin_rep.report_type), fin_rep.currency, 
-            fin_rep.revenue, fin_rep.net_income, fin_rep.total_debt, fin_rep.equity
-        );
+            {
+                Param(company_id),
+                Param(TimeUtils::DateToString(report.period_date)),
+                Param(ReportTypeToString(report.report_type)),
+                Param(report.currency),
+                Param(report.revenue),
+                Param(report.net_income),
+                Param(report.total_debt),
+                Param(report.equity)
+            });
 
-        txn.commit();
-        Logger::Debug("[StockRepository] Financial report for company_id {} saved", company_id);
+        Logger::Debug(
+            "[StockRepository] Financial report for company_id {} saved", 
+            company_id);
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Failed to save financial report for company_id {}: {}",
-                        company_id, ex.what());
+        Logger::Error(
+            "[StockRepository] Failed to save financial report for company_id {}: {}",
+            company_id, ex.what());
     }
 }
 
-void StockRepository::SaveCompanyFinancialReportsBatch(const int company_id,
-                                                        const std::vector<CompanyFinancialReport>& fin_reps) {
+boost::asio::awaitable<void> StockRepository::SaveCompanyFinancialReportsBatchAsync(
+        int company_id, 
+        std::vector<CompanyFinancialReport> financial_reports) {
+    if (financial_reports.empty()) {
+        co_return;
+    }
+
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec(
-            "CREATE TEMP TABLE temp_financials ON COMMIT DROP AS "
-            "SELECT company_id, period_date, report_type, currency, revenue, net_income, total_debt, equity "
-            "FROM companies_financial_reports "
-            "LIMIT 0"
-        );
-
-        auto stream = pqxx::stream_to::table(
-                            txn,
-                            {"temp_financials"},
-                            {"company_id", "period_date", "report_type",
-                                "currency", "revenue", "net_income", 
-                                "total_debt", "equity"}
-                        );
-
-        for (const auto& fin_rep : fin_reps) {
-            stream << std::make_tuple(company_id, TimeUtils::DateToString(fin_rep.period_date),
-                                        ReportTypeToString(fin_rep.report_type), fin_rep.currency, 
-                                        fin_rep.revenue, fin_rep.net_income, fin_rep.total_debt, fin_rep.equity);
+        nlohmann::json rows = nlohmann::json::array();
+        for (const auto& report : financial_reports) {
+            rows.push_back({
+                {"company_id", company_id},
+                {"period_date", TimeUtils::DateToString(report.period_date)},
+                {"report_type", ReportTypeToString(report.report_type)},
+                {"currency", report.currency},
+                {"revenue", report.revenue},
+                {"net_income", report.net_income},
+                {"total_debt", report.total_debt},
+                {"equity", report.equity}
+            });
         }
 
-        stream.complete();
+        co_await db_.Query(
+            "INSERT INTO companies_financial_reports(company_id, period_date, "
+            "report_type, currency, revenue, net_income, total_debt, equity) "
+            "SELECT company_id, period_date, report_type, currency, revenue, "
+            "net_income, total_debt, equity "
+            "FROM jsonb_to_recordset($1::jsonb) "
+            "AS x(company_id int, period_date date, report_type report_type_enum, "
+            "currency text, revenue numeric, net_income numeric, total_debt numeric, "
+            "equity numeric) "
+            "ON CONFLICT (company_id, period_date, report_type) DO NOTHING",
+            {Param(rows.dump())});
 
-        txn.exec(
-            "INSERT INTO companies_financial_reports(company_id, period_date, report_type, "
-            "currency, revenue, net_income, total_debt, equity) "
-            "SELECT * FROM temp_financials "
-            "ON CONFLICT (company_id, period_date, report_type) DO NOTHING"
-        );
-
-        txn.commit();
-        Logger::Debug("[StockRepository] Batch insert company {} financial reports completed", company_id);
+        Logger::Debug(
+            "[StockRepository] Batch insert company {} financial reports completed", 
+            company_id);
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Batch insert company {} financial reports failed", company_id);
+        Logger::Error(
+            "[StockRepository] Batch insert company {} financial reports failed", 
+            company_id);
     }
 }
 
-void StockRepository::SaveStockDividends(const int company_id, const StockDividends& dividends) {
+boost::asio::awaitable<void> StockRepository::SaveStockDividendsAsync(
+        int company_id, 
+        StockDividends dividends) {
+    PgParam payment_date = std::nullopt;
+    if (dividends.payment_date.has_value()) {
+        payment_date = TimeUtils::DateToString(*dividends.payment_date);
+    }
+
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-        
-        std::optional<std::string> payment_date_;
-        if (dividends.payment_date.has_value()) {
-            payment_date_ = TimeUtils::DateToString(dividends.payment_date.value());
-        }
-
-        txn.exec_params(
-            "INSERT INTO stock_dividends(company_id, ex_date, "
-            "payment_date, amount) "
+        co_await db_.Query(
+            "INSERT INTO stock_dividends(company_id, ex_date, payment_date, amount) "
             "VALUES ($1, $2, $3, $4) "
             "ON CONFLICT (company_id, ex_date) DO NOTHING",
-            company_id, TimeUtils::DateToString(dividends.ex_date), 
-            payment_date_, dividends.amount
-        );  
+            {
+                Param(company_id),
+                Param(TimeUtils::DateToString(dividends.ex_date)),
+                std::move(payment_date),
+                Param(dividends.amount)
+            });
 
-        txn.commit();
-        Logger::Debug("[StockRepository] Stock dividends for company_id {} saved", company_id);
+        Logger::Debug(
+            "[StockRepository] Stock dividends for company_id {} saved", 
+            company_id);
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Failed to save stock dividends for company_id {}: {}", 
-                        company_id, ex.what());
+        Logger::Error(
+            "[StockRepository] Failed to save stock dividends for company_id {}: {}", 
+            company_id, ex.what());
     }
 }
 
-void StockRepository::SaveStockDividendsBatch(const int company_id, 
-                                                const std::vector<StockDividends>& dividends) {
+boost::asio::awaitable<void> StockRepository::SaveStockDividendsBatchAsync(
+        int company_id, 
+        std::vector<StockDividends> dividends) {
+    if (dividends.empty()) {
+        co_return;
+    }
+
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec(
-            "CREATE TEMP TABLE temp_dividends ON COMMIT DROP AS " 
-            "SELECT company_id, ex_date, payment_date, amount "
-            "FROM stock_dividends "
-            "LIMIT 0"
-        );
-
-        auto stream = pqxx::stream_to::table(
-                            txn,
-                            {"temp_dividends"},
-                            {"company_id", "ex_date", "payment_date", "amount"} 
-                        );
-
-        for (const auto& div : dividends) {
-            std::optional<std::string> pay_str;
-            if (div.payment_date.has_value()) {
-                pay_str = TimeUtils::DateToString(div.payment_date.value());
+        nlohmann::json rows = nlohmann::json::array();
+        for (const auto& dividend : dividends) {
+            nlohmann::json payment_date = nullptr;
+            if (dividend.payment_date.has_value()) {
+                payment_date = TimeUtils::DateToString(*dividend.payment_date);
             }
-
-            stream << std::make_tuple(company_id, TimeUtils::DateToString(div.ex_date),
-                                        pay_str, div.amount);
-        }    
-
-        stream.complete();
-
-        txn.exec(
-            "INSERT INTO stock_dividends(company_id, ex_date, payment_date, amount) "
-            "SELECT * FROM temp_dividends "
-            "ON CONFLICT (company_id, ex_date) DO UPDATE "
-            "SET payment_date = EXCLUDED.payment_date, amount = EXCLUDED.amount"
-        );
-
-        txn.commit();
-        Logger::Debug("[StockRepository] Batch insert company {} stock dividends completed", company_id);
-    } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Batch insert company {} dividends failed: {}", company_id, ex.what());
-    }
-}
-
-void StockRepository::SaveStockPrice(const int company_id, const StockPriceCandle& stock_price) {
-    try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec_params(
-            "INSERT INTO stock_prices(company_id, timestamp, "
-            "open, high, low, close, volume) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7) "
-            "ON CONFLICT (company_id, timestamp) DO NOTHING",
-            company_id, TimeUtils::TimestampToString(stock_price.timestamp), 
-            stock_price.open, stock_price.high, stock_price.low, 
-            stock_price.close, stock_price.volume
-        );
-
-        txn.commit();
-        Logger::Debug("[StockRepository] Stock price for company_id {} saved", company_id);
-    } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Failed to save stock price for company_id {}: {}",
-                        company_id, ex.what());
-    }
-}
-
-void StockRepository::SaveStockPricesBatch(const int company_id, 
-                                            const std::vector<StockPriceCandle>& prices) {
-    try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec(
-            "CREATE TEMP TABLE temp_stock_prices ON COMMIT DROP AS "
-            "SELECT company_id, timestamp, open, high, low, close, volume "
-            "FROM stock_prices "
-            "LIMIT 0"
-        );
-
-        auto stream = pqxx::stream_to::table(
-                            txn, 
-                            {"temp_stock_prices"}, 
-                            {"company_id", "timestamp", "open", "high", "low", "close", "volume"}
-                        );
-
-        for (const auto& candle : prices) {
-            stream << std::make_tuple(company_id, TimeUtils::TimestampToString(candle.timestamp),
-                                        candle.open, candle.high, candle.low, candle.close, 
-                                        candle.volume);
+            rows.push_back({
+                {"company_id", company_id},
+                {"ex_date", TimeUtils::DateToString(dividend.ex_date)},
+                {"payment_date", std::move(payment_date)},
+                {"amount", dividend.amount}
+            });
         }
 
-        stream.complete();
+        co_await db_.Query(
+            "INSERT INTO stock_dividends(company_id, ex_date, payment_date, amount) "
+            "SELECT company_id, ex_date, payment_date, amount "
+            "FROM jsonb_to_recordset($1::jsonb) "
+            "AS x(company_id int, ex_date date, payment_date date, amount numeric) "
+            "ON CONFLICT (company_id, ex_date) DO UPDATE "
+            "SET payment_date = EXCLUDED.payment_date, amount = EXCLUDED.amount",
+            {Param(rows.dump())});
 
-        txn.exec(
-            "INSERT INTO stock_prices(company_id, timestamp, open, high, low, close, volume) "
-            "SELECT * FROM temp_stock_prices "
-            "ON CONFLICT (company_id, timestamp) DO NOTHING"
-        );
-
-        txn.commit();
-        Logger::Debug("[StockRepository] Batch insert prices for company {} completed", company_id);
+        Logger::Debug(
+            "[StockRepository] Batch insert company {} stock dividends completed", 
+            company_id);
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Batch insert prices failed for company {}: {}", company_id, ex.what());
+        Logger::Error(
+            "[StockRepository] Batch insert company {} dividends failed: {}", 
+            company_id, ex.what());
     }
 }
 
-void StockRepository::SaveStockSplit(const int company_id, const StockSplit& split) {
+boost::asio::awaitable<void> StockRepository::SaveStockPriceAsync(
+        int company_id, 
+        StockPriceCandle stock_price) {
     try {
-        auto conn_guard = db_.GetConnection(); 
+        co_await db_.Query(
+            "INSERT INTO stock_prices(company_id, timestamp, open, "
+            "high, low, close, volume) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7) "
+            "ON CONFLICT (company_id, timestamp) DO NOTHING",
+            {
+                Param(company_id),
+                Param(TimeUtils::TimestampToString(stock_price.timestamp)),
+                Param(stock_price.open),
+                Param(stock_price.high),
+                Param(stock_price.low),
+                Param(stock_price.close),
+                Param(stock_price.volume)
+            });
 
-        pqxx::work txn(conn_guard->Get());
+        Logger::Debug(
+            "[StockRepository] Stock price for company_id {} saved", 
+            company_id);
+    } catch (const std::exception& ex) {
+        Logger::Error(
+            "[StockRepository] Failed to save stock price for company_id {}: {}",
+            company_id, ex.what());
+    }
+}
 
-        txn.exec_params(
+boost::asio::awaitable<void> StockRepository::SaveStockPricesBatchAsync(
+        int company_id, 
+        std::vector<StockPriceCandle> prices) {
+    if (prices.empty()) {
+        co_return;
+    }
+    
+    try {
+        nlohmann::json rows = nlohmann::json::array();
+        for (const auto& candle : prices) {
+            rows.push_back({
+                {"company_id", company_id},
+                {"timestamp", TimeUtils::TimestampToString(candle.timestamp)},
+                {"open", candle.open},
+                {"high", candle.high},
+                {"low", candle.low},
+                {"close", candle.close},
+                {"volume", candle.volume}
+            });
+        }
+
+        co_await db_.Query(
+            "INSERT INTO stock_prices(company_id, timestamp, open, "
+            "high, low, close, volume) "
+            "SELECT company_id, timestamp, open, high, low, close, volume "
+            "FROM jsonb_to_recordset($1::jsonb) "
+            "AS x(company_id int, timestamp timestamp, open numeric, high numeric, "
+            "low numeric, close numeric, volume bigint) "
+            "ON CONFLICT (company_id, timestamp) DO NOTHING",
+            {Param(rows.dump())});
+
+        Logger::Debug(
+            "[StockRepository] Batch insert prices for company {} completed", 
+            company_id);
+    } catch (const std::exception& ex) {
+        Logger::Error(
+            "[StockRepository] Batch insert prices failed for company {}: {}", 
+            company_id, ex.what());
+    }
+}
+
+boost::asio::awaitable<void> StockRepository::SaveStockSplitAsync(
+        int company_id, 
+        StockSplit split) {
+    try {
+        co_await db_.Query(
             "INSERT INTO stock_splits(company_id, split_date, numerator, denominator) "
             "VALUES ($1, $2, $3, $4) "
             "ON CONFLICT (company_id, split_date) DO UPDATE "
             "SET numerator = EXCLUDED.numerator, denominator = EXCLUDED.denominator",
-            company_id, TimeUtils::DateToString(split.date), split.numerator, split.denominator
-        );
+            {
+                Param(company_id),
+                Param(TimeUtils::DateToString(split.date)),
+                Param(split.numerator),
+                Param(split.denominator)
+            });
 
-        txn.commit();
-        Logger::Debug("[StockRepository] Stock split saved for company_id: {}", company_id);
+        Logger::Debug(
+            "[StockRepository] Stock split saved for company_id: {}", 
+            company_id);
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Failed to save stock split for company_id {}: {}", company_id, ex.what());
+        Logger::Error(
+            "[StockRepository] Failed to save stock split for company_id {}: {}", 
+            company_id, ex.what());
     }
 }
 
-void StockRepository::SaveStockSplitsBatch(const int company_id, 
-                                            const std::vector<StockSplit>& splits) {
+boost::asio::awaitable<void> StockRepository::SaveStockSplitsBatchAsync(
+        int company_id, 
+        std::vector<StockSplit> splits) {
+    if (splits.empty()) {
+        co_return;
+    }
+
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec(
-            "CREATE TEMP TABLE temp_splits ON COMMIT DROP AS "
-            "SELECT company_id, split_date, numerator, denominator "
-            "FROM stock_splits "
-            "LIMIT 0"
-        );
-
-        auto stream = pqxx::stream_to::table(
-                            txn,
-                            {"temp_splits"},
-                            {"company_id", "split_date", "numerator", "denominator"}
-                        );
-
+        nlohmann::json rows = nlohmann::json::array();
         for (const auto& split : splits) {
-            stream << std::make_tuple(company_id, TimeUtils::DateToString(split.date),
-                                        split.numerator, split.denominator);
+            rows.push_back({
+                {"company_id", company_id},
+                {"split_date", TimeUtils::DateToString(split.date)},
+                {"numerator", split.numerator},
+                {"denominator", split.denominator}
+            });
         }
-        
-        stream.complete();
 
-        txn.exec(
+        co_await db_.Query(
             "INSERT INTO stock_splits(company_id, split_date, numerator, denominator) "
-            "SELECT * FROM temp_splits "
+            "SELECT company_id, split_date, numerator, denominator "
+            "FROM jsonb_to_recordset($1::jsonb) "
+            "AS x(company_id int, split_date date, numerator numeric, denominator numeric) "
             "ON CONFLICT (company_id, split_date) DO UPDATE "
-            "SET numerator = EXCLUDED.numerator, denominator = EXCLUDED.denominator"
-        );
+            "SET numerator = EXCLUDED.numerator, denominator = EXCLUDED.denominator",
+            {Param(rows.dump())});
 
-        txn.commit();
-        Logger::Debug("[StockRepository] Batch insert stock splits completed for company_id: {}", company_id);
+        Logger::Debug(
+            "[StockRepository] Batch insert stock splits completed for company_id: {}", 
+            company_id);
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Batch insert stock splits failed for company_id {}: {}", 
-                        company_id, ex.what());
+        Logger::Error(
+            "[StockRepository] Batch insert stock splits failed for company_id {}: {}", 
+            company_id, ex.what());
     }
 }
 
-std::vector<StockPriceCandle> StockRepository::GetHistoryStockPrices(const int company_id, 
-                                                                        const Timestamp from, 
-                                                                        const Timestamp to) {
-    std::vector<StockPriceCandle> result;
+boost::asio::awaitable<std::vector<StockPriceCandle>> StockRepository::GetHistoryStockPricesAsync(
+        int company_id, 
+        Timestamp from, 
+        Timestamp to) {
+    std::vector<StockPriceCandle> prices;
     try {
-        auto conn_guard = db_.GetConnection();
+        auto result = co_await db_.Query(
+            "SELECT timestamp, open, high, low, close, volume "
+            "FROM stock_prices "
+            "WHERE company_id = $1 AND timestamp >= $2 AND timestamp <= $3 "
+            "ORDER BY timestamp ASC",
+            {
+                Param(company_id),
+                Param(TimeUtils::TimestampToString(from)),
+                Param(TimeUtils::TimestampToString(to))
+            });
 
-        pqxx::nontransaction ntxn(conn_guard->Get());
+        prices.reserve(static_cast<std::size_t>(result.RowCount()));
 
-        std::string sql = R"(
-            SELECT timestamp, open, high, low, close, volume 
-            FROM stock_prices 
-            WHERE company_id = $1 
-            AND timestamp >= $2 
-            AND timestamp <= $3 
-            ORDER BY timestamp ASC
-        )";
-
-        auto rows = ntxn.exec_params(
-                        sql, 
-                        company_id, 
-                        TimeUtils::TimestampToString(from), 
-                        TimeUtils::TimestampToString(to)
-                    );
-
-        result.reserve(rows.size());
-        for (const auto& row : rows) {
-            StockPriceCandle candle;
-            candle.timestamp = TimeUtils::StringToTimestamp(row[0].c_str());
-            candle.open = row[1].as<double>();
-            candle.high = row[2].as<double>();
-            candle.low = row[3].as<double>();
-            candle.close = row[4].as<double>();
-            candle.volume = row[5].as<long long>(); 
-            result.push_back(candle);
+        for (int row = 0; row < result.RowCount(); ++row) {
+            prices.push_back({
+                TimeUtils::StringToTimestamp(Text(result, row, 0)),
+                std::stod(Text(result, row, 1)),
+                std::stod(Text(result, row, 2)),
+                std::stod(Text(result, row, 3)),
+                std::stod(Text(result, row, 4)),
+                std::stoll(Text(result, row, 5))
+            });
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] GetHistoryStockCandles failed: {}", ex.what());
+        Logger::Error(
+            "[StockRepository] GetHistoryStockCandles failed: {}", 
+            ex.what());
     }
-    return result;
+    co_return prices;
 }
 
-std::optional<int> StockRepository::GetCompanyId(const std::string& ticker) {
+boost::asio::awaitable<std::optional<int>> StockRepository::GetCompanyIdAsync(
+        std::string ticker) {
     try {
-        auto conn_guard = db_.GetConnection();
-
-        pqxx::nontransaction ntxn(conn_guard->Get());
-
-        auto row = ntxn.exec_params1(
+        auto result = co_await db_.Query(
             "SELECT id "
             "FROM companies "
-            "WHERE ticker = $1", 
-            ticker
-        );
+            "WHERE ticker = $1",
+            {Param(std::move(ticker))});
+        if (result.RowCount() == 0) {
+            co_return std::nullopt;
+        }
 
-        return row[0].as<int>();
+        co_return std::stoi(Text(result, 0, 0));
     } catch (const std::exception& ex) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 }
 
-std::optional<CompanyFullInfo> StockRepository::GetCompanyByTicker(const std::string& ticker) {
+boost::asio::awaitable<std::optional<CompanyFullInfo>> StockRepository::GetCompanyByTickerAsync(
+        std::string ticker) {
     try {
-        auto conn_guard = db_.GetConnection();
-
-        pqxx::nontransaction ntxn(conn_guard->Get());
-        
-        auto row = ntxn.exec_params1(
-            "SELECT id, ticker, name, country, sector, industry, currency, "
-            "description, exchange, updated_at "
+        auto result = co_await db_.Query(
+            "SELECT id, ticker, name, country, sector, industry, "
+            "currency, description, exchange, updated_at "
             "FROM companies "
-            "WHERE ticker = $1", 
-            ticker
-        );
+            "WHERE ticker = $1",
+            {Param(std::move(ticker))});
+        if (result.RowCount() == 0) {
+            co_return std::nullopt;
+        }
 
-        CompanyFullInfo info;
-        info.id = row[0].as<int>();
-        info.ticker = row[1].as<std::string>();
-        info.name = row[2].as<std::string>();
-        if (!row[3].is_null()) {
-            info.country = row[3].as<std::string>();
+        CompanyFullInfo company;
+        company.id = std::stoi(Text(result, 0, 0));
+        company.ticker = Text(result, 0, 1);
+        company.name = Text(result, 0, 2);
+        if (!result.IsNull(0, 3)) {
+            company.country = Text(result, 0, 3);
         }
-        if (!row[4].is_null()) {
-            info.sector = row[4].as<std::string>();
+        if (!result.IsNull(0, 4)) {
+            company.sector = Text(result, 0, 4);
         }
-        if (!row[5].is_null()) {
-            info.industry = row[5].as<std::string>();
+        if (!result.IsNull(0, 5)) {
+            company.industry = Text(result, 0, 5);
         }
-        info.currency = row[6].as<std::string>();
-        if (!row[7].is_null()) {
-            info.description = row[7].as<std::string>();
+        company.currency = Text(result, 0, 6);
+        if (!result.IsNull(0, 7)) {
+            company.description = Text(result, 0, 7);
         }
-        info.exchange = row[8].as<std::string>();
-        info.updated_at = TimeUtils::StringToTimestamp(row[9].c_str());
-        
-        return info;
+        company.exchange = Text(result, 0, 8);
+        company.updated_at = TimeUtils::StringToTimestamp(Text(result, 0, 9));
+
+        co_return company;
     } catch (const std::exception& ex) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 }
 
-std::vector<CompanyPreview> StockRepository::GetAllCompaniesPreview() {
-    std::vector<CompanyPreview> result;
+boost::asio::awaitable<std::vector<CompanyPreview>> StockRepository::GetAllCompaniesPreviewAsync() {
+    std::vector<CompanyPreview> companies;
     try {
-        auto conn_guard = db_.GetConnection();
-
-        pqxx::nontransaction ntxn(conn_guard->Get());
-
-        auto rows = ntxn.exec_params(
+        auto result = co_await db_.Query(
             "SELECT id, ticker, name, country, sector, currency "
             "FROM companies "
-            "ORDER BY ticker"
-        );
+            "ORDER BY ticker");
 
-        for (const auto& row : rows) {
-            CompanyPreview cp;
-            cp.id = row[0].as<int>();
-            cp.ticker = row[1].as<std::string>();
-            cp.name = row[2].as<std::string>();
-            if (!row[3].is_null()) {
-                cp.country = row[3].as<std::string>();
+        companies.reserve(static_cast<std::size_t>(result.RowCount()));
+
+        for (int row = 0; row < result.RowCount(); ++row) {
+            CompanyPreview company;
+            company.id = std::stoi(Text(result, row, 0));
+            company.ticker = Text(result, row, 1);
+            company.name = Text(result, row, 2);
+            if (!result.IsNull(row, 3)) {
+                company.country = Text(result, row, 3);
             }
-            if (!row[4].is_null()) {
-                cp.sector = row[4].as<std::string>();
+            if (!result.IsNull(row, 4)) {
+                company.sector = Text(result, row, 4);
             }
-            cp.currency = row[5].as<std::string>();
-            
-            result.push_back(cp);
+            company.currency = Text(result, row, 5);
+            companies.push_back(std::move(company));
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Failed to get all companies: {}", ex.what());
+        Logger::Error(
+            "[StockRepository] Failed to get all companies: {}", 
+            ex.what());
     }
-    return result;
+    co_return companies;
 }
 
-std::optional<StockPriceCandle> StockRepository::GetLastStockPrice(int company_id) {
+boost::asio::awaitable<std::optional<StockPriceCandle>> StockRepository::GetLastStockPriceAsync(
+        int company_id) {
     try {
-        auto conn_guard = db_.GetConnection();
-
-        pqxx::nontransaction ntxn(conn_guard->Get());
-        
-        auto rows = ntxn.exec_params(
+        auto result = co_await db_.Query(
             "SELECT timestamp, open, high, low, close, volume "
             "FROM stock_prices "
             "WHERE company_id = $1 "
             "ORDER BY timestamp DESC "
             "LIMIT 1",
-            company_id
-        );
-
-        if (rows.empty()) {
-            return std::nullopt;
+            {Param(company_id)});
+        if (result.RowCount() == 0) {
+            co_return std::nullopt;
         }
 
-        auto row = rows[0];
-        return StockPriceCandle{
-            TimeUtils::StringToTimestamp(row[0].c_str()),
-            row[1].as<double>(),
-            row[2].as<double>(),
-            row[3].as<double>(),
-            row[4].as<double>(),
-            row[5].as<long long>()
+        co_return StockPriceCandle{
+            TimeUtils::StringToTimestamp(Text(result, 0, 0)),
+            std::stod(Text(result, 0, 1)),
+            std::stod(Text(result, 0, 2)),
+            std::stod(Text(result, 0, 3)),
+            std::stod(Text(result, 0, 4)),
+            std::stoll(Text(result, 0, 5))
         };
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Failed to get last stock price for {}: {}", company_id, ex.what());
-        return std::nullopt;
+        Logger::Error(
+            "[StockRepository] Failed to get last stock price for {}: {}", 
+            company_id, ex.what());
+        co_return std::nullopt;
     }
 }
 
-std::vector<StockDividends> StockRepository::GetDividends(int company_id, const Date from, const Date to) {
-    std::vector<StockDividends> result;
+boost::asio::awaitable<std::vector<StockDividends>> StockRepository::GetDividendsAsync(
+        int company_id, 
+        Date from, 
+        Date to) {
+    std::vector<StockDividends> dividends;
     try {
-        auto conn_guard = db_.GetConnection();
-
-        pqxx::nontransaction ntxn(conn_guard->Get());
-        
-        auto rows = ntxn.exec_params(
+        auto result = co_await db_.Query(
             "SELECT ex_date, payment_date, amount "
             "FROM stock_dividends "
             "WHERE company_id = $1 AND ex_date >= $2 AND ex_date <= $3 "
             "ORDER BY ex_date DESC",
-            company_id, TimeUtils::DateToString(from), TimeUtils::DateToString(to)
-        );
+            {
+                Param(company_id),
+                Param(TimeUtils::DateToString(from)),
+                Param(TimeUtils::DateToString(to))
+            });
 
-        for (const auto& row : rows) {
-            StockDividends div;
-            div.ex_date = TimeUtils::StringToDate(row[0].c_str());
-            if (row[1].is_null()) {
-                div.payment_date = std::nullopt;
-            } else {
-                div.payment_date = TimeUtils::StringToDate(row[1].c_str());
+        dividends.reserve(static_cast<std::size_t>(result.RowCount()));
+
+        for (int row = 0; row < result.RowCount(); ++row) {
+            StockDividends dividend;
+            dividend.ex_date = TimeUtils::StringToDate(Text(result, row, 0));
+            if (!result.IsNull(row, 1)) {
+                dividend.payment_date = TimeUtils::StringToDate(Text(result, row, 1));
             }
-            div.amount = row[2].as<double>();
-            result.push_back(div);
+            dividend.amount = std::stod(Text(result, row, 2));
+            dividends.push_back(std::move(dividend));
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Failed to get dividends: {}", ex.what());
+        Logger::Error(
+            "[StockRepository] Failed to get dividends: {}", 
+            ex.what());
     }
-    return result;
+    co_return dividends;
 }
 
-std::vector<CompanyFinancialReport> StockRepository::GetFinancialReports(int company_id) {
+boost::asio::awaitable<std::vector<CompanyFinancialReport>> StockRepository::GetFinancialReportsAsync(
+        int company_id) {
     std::vector<CompanyFinancialReport> reports;
     try {
-        auto conn_guard = db_.GetConnection();
-
-        pqxx::nontransaction ntxn(conn_guard->Get());
-
-        auto rows = ntxn.exec_params(
-            "SELECT period_date, report_type, currency, revenue, net_income, total_debt, equity "
+        auto result = co_await db_.Query(
+            "SELECT period_date, report_type, currency, revenue, "
+            "net_income, total_debt, equity "
             "FROM companies_financial_reports "
             "WHERE company_id = $1 "
             "ORDER BY period_date DESC",
-            company_id
-        );
+            {Param(company_id)});
 
-        for (const auto& row : rows) {
-            CompanyFinancialReport r;
+        reports.reserve(static_cast<std::size_t>(result.RowCount()));
 
-            r.period_date = TimeUtils::StringToDate(row[0].c_str());
-            r.report_type = StringToReportType(row[1].c_str());
-            r.currency = row[2].as<std::string>();
-            r.revenue = row[3].as<double>();
-            r.net_income = row[4].as<double>();
-            r.total_debt = row[5].as<double>();
-            r.equity = row[6].as<double>();
-
-            reports.push_back(r);
+        for (int row = 0; row < result.RowCount(); ++row) {
+            reports.push_back({
+                TimeUtils::StringToDate(Text(result, row, 0)),
+                StringToReportType(Text(result, row, 1)),
+                Text(result, row, 2),
+                std::stod(Text(result, row, 3)),
+                std::stod(Text(result, row, 4)),
+                std::stod(Text(result, row, 5)),
+                std::stod(Text(result, row, 6))
+            });
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Failed to get financial reports: {}", ex.what());
+        Logger::Error(
+            "[StockRepository] Failed to get financial reports: {}", 
+            ex.what());
     }
-    return reports;
+    co_return reports;
 }
 
-void StockRepository::UpdateCompanyDescription(int company_id, const std::string& description) {
+boost::asio::awaitable<void> StockRepository::UpdateCompanyDescriptionAsync(
+        int company_id, 
+        std::string description) {
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-        
-        txn.exec_params(
+        co_await db_.Query(
             "UPDATE companies "
             "SET description = $1, updated_at = NOW() "
             "WHERE id = $2",
-            description, company_id
-        );
+            {Param(std::move(description)), Param(company_id)});
 
-        txn.commit();
-        Logger::Debug("[StockRepository] Updated description for company_id: {}", company_id);
+        Logger::Debug(
+            "[StockRepository] Updated description for company_id: {}", 
+            company_id);
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Failed to update company {}: {}", company_id, ex.what());
+        Logger::Error(
+            "[StockRepository] Failed to update company {}: {}", 
+            company_id, ex.what());
     }
 }
 
-void StockRepository::DeleteCompany(int company_id) {
+boost::asio::awaitable<void> StockRepository::DeleteCompanyAsync(int company_id) {
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec_params(
+        co_await db_.Query(
             "DELETE FROM companies "
             "WHERE id = $1", 
-            company_id
-        );
-        txn.commit();
-        Logger::Info("[StockRepository] Deleted company_id: {}", company_id);
+            {Param(company_id)});
+
+        Logger::Info(
+            "[StockRepository] Deleted company_id: {}", 
+            company_id);
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Failed to delete company {}: {}", company_id, ex.what());
+        Logger::Error(
+            "[StockRepository] Failed to delete company {}: {}", 
+            company_id, ex.what());
     }
 }
 
-void StockRepository::DeleteOldPrices(int company_id, const Timestamp older_than) {
+boost::asio::awaitable<void> StockRepository::DeleteOldPricesAsync(
+        int company_id, 
+        Timestamp older_than) {
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec_params(
+        const auto timestamp = TimeUtils::TimestampToString(older_than);
+        co_await db_.Query(
             "DELETE FROM stock_prices "
             "WHERE company_id = $1 AND timestamp < $2",
-            company_id, TimeUtils::TimestampToString(older_than)
-        );
+            {Param(company_id), Param(timestamp)});
 
-        txn.commit();
-        Logger::Info("[StockRepository] Deleted company {} prices older than {}", 
-                        company_id, TimeUtils::TimestampToString(older_than));
+        Logger::Info(
+            "[StockRepository] Deleted company {} prices older than {}", 
+            company_id, TimeUtils::TimestampToString(older_than));
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Failed to cleanup prices for {} older than {}: {}", 
-                        company_id, TimeUtils::TimestampToString(older_than), ex.what());
+        Logger::Error(
+            "[StockRepository] Failed to cleanup prices for {} older than {}: {}", 
+            company_id, TimeUtils::TimestampToString(older_than), ex.what());
     }
 }
 
-std::optional<Timestamp> StockRepository::GetLastUpdate(int company_id, const std::string& data_type) {
+boost::asio::awaitable<std::optional<Timestamp>> StockRepository::GetLastUpdateAsync(
+        int company_id, 
+        std::string data_type) {
     try {
-        auto conn_guard = db_.GetConnection();
-
-        pqxx::nontransaction ntxn(conn_guard->Get());
-        
-        auto row = ntxn.exec_params1(
-            "SELECT updated_at FROM data_update_logs "
+        auto result = co_await db_.Query(
+            "SELECT updated_at "
+            "FROM data_update_logs "
             "WHERE company_id = $1 AND data_type = $2",
-            company_id, data_type
-        );
-        
-        return TimeUtils::StringToTimestamp(row[0].c_str());
-    } catch (...) {
-        return std::nullopt;
+            {Param(company_id), Param(std::move(data_type))});
+        if (result.RowCount() == 0) {
+            co_return std::nullopt;
+        }
+
+        co_return TimeUtils::StringToTimestamp(Text(result, 0, 0));
+    } catch (const std::exception&) {
+        co_return std::nullopt;
     }
 }
 
-void StockRepository::SetLastUpdate(int company_id, const std::string& data_type) {
+boost::asio::awaitable<void> StockRepository::SetLastUpdateAsync(
+        int company_id, 
+        std::string data_type) {
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-        
-        txn.exec_params(
-            "INSERT INTO data_update_logs (company_id, data_type, updated_at) "
+        co_await db_.Query(
+            "INSERT INTO data_update_logs(company_id, data_type, updated_at) "
             "VALUES ($1, $2, NOW()) "
-            "ON CONFLICT (company_id, data_type) "
-            "DO UPDATE SET updated_at = NOW()",
-            company_id, data_type
-        );
-        
-        txn.commit();
+            "ON CONFLICT (company_id, data_type) DO UPDATE "
+            "SET updated_at = NOW()",
+            {Param(company_id), Param(std::move(data_type))});
     } catch (const std::exception& ex) {
-        Logger::Error("[StockRepository] Failed to set last update log: {}", ex.what());
+        Logger::Error(
+            "[StockRepository] Failed to set last update log: {}", 
+            ex.what());
     }
 }
 
-std::string StockRepository::ReportTypeToString(const ReportType type) {
+std::string StockRepository::ReportTypeToString(ReportType type) {
     switch (type) {
         case ReportType::Annual: 
             return "annual";
@@ -695,19 +723,23 @@ std::string StockRepository::ReportTypeToString(const ReportType type) {
         case ReportType::Ttm:
             return "ttm";
     }
-    Logger::Error("[StockRepository] Couldn't convert ReportType type to string");
+
+    Logger::Error(
+        "[StockRepository] Couldn't convert ReportType type to string");
     throw std::runtime_error("Couldn't convert ReportType type to string");
 }
 
-ReportType StockRepository::StringToReportType(const std::string& str) {
-    if (str == "annual") {
+ReportType StockRepository::StringToReportType(const std::string& value) {
+    if (value == "annual") {
         return ReportType::Annual;
-    } else if (str == "quarterly") {
+    } else if (value == "quarterly") {
         return ReportType::Quarterly;
-    } else if (str == "ttm") {
+    } else if (value == "ttm") {
         return ReportType::Ttm;
     }
     
-    Logger::Error("[StockRepository] Couldn't convert string type to ReportType: {}", str);
-    throw std::runtime_error("Couldn't convert string '" + str + "' to ReportType");
+    Logger::Error(
+        "[StockRepository] Couldn't convert string type to ReportType: {}", 
+        value);
+    throw std::runtime_error("Couldn't convert string '" + value + "' to ReportType");
 }

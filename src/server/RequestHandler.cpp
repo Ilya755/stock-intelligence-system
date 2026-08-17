@@ -9,7 +9,7 @@ RequestHandler::RequestHandler(std::shared_ptr<MarketService> service)
     : service_(service) 
     {}
 
-std::string RequestHandler::HandleRequest(const std::string& request_str) {
+boost::asio::awaitable<std::string> RequestHandler::HandleRequest(const std::string& request_str) {
     json response;
     std::string command;
 
@@ -17,12 +17,14 @@ std::string RequestHandler::HandleRequest(const std::string& request_str) {
         auto req = json::parse(request_str);
         command = req.value("command", "UNKNOWN");
         
-        Logger::Debug("[RequestHandler] Processing command: {}", command);
+        Logger::Debug(
+            "[RequestHandler] Processing command: {}", 
+            command);
         
         if (command == "GET_STOCK_PRICE") {
             std::string ticker = GetStringParam(req, "ticker");
 
-            auto price = service_->GetStockPrice(ticker);
+            auto price = co_await service_->GetStockPrice(ticker);
             
             if (price.has_value()) {
                 response = CreateSuccessResponse();
@@ -34,7 +36,7 @@ std::string RequestHandler::HandleRequest(const std::string& request_str) {
         } else if (command == "GET_COMPANY_PROFILE") {
             std::string ticker = GetStringParam(req, "ticker");
 
-            auto profile = service_->GetCompanyProfile(ticker);
+            auto profile = co_await service_->GetCompanyProfile(ticker);
             
             if (profile.has_value()) {
                 response = CreateSuccessResponse();
@@ -57,7 +59,7 @@ std::string RequestHandler::HandleRequest(const std::string& request_str) {
             Timestamp to = TimeUtils::StringToTimestamp(GetStringParam(req, "to"));
             TimeFrame interval = ParseInterval(GetStringParam(req, "interval"));
 
-            auto history = service_->GetStockHistory(ticker, from, to, interval);
+            auto history = co_await service_->GetStockHistory(ticker, from, to, interval);
             
             if (history.empty()) {
                 response = CreateErrorResponse("No history data found or parameters unsupported by providers.");
@@ -83,7 +85,7 @@ std::string RequestHandler::HandleRequest(const std::string& request_str) {
             Date from = TimeUtils::StringToDate(GetStringParam(req, "from"));
             Date to = TimeUtils::StringToDate(GetStringParam(req, "to"));
 
-            auto divs = service_->GetDividends(ticker, from, to);
+            auto divs = co_await service_->GetDividends(ticker, from, to);
 
             if (divs.empty()) {
                 response = CreateErrorResponse("No dividend data found or API key/limit errors.");
@@ -102,7 +104,7 @@ std::string RequestHandler::HandleRequest(const std::string& request_str) {
         } else if (command == "GET_FINANCIALS_REPORTS") {
             std::string ticker = GetStringParam(req, "ticker");
 
-            auto reports = service_->GetFinancialReports(ticker);
+            auto reports = co_await service_->GetFinancialReports(ticker);
 
             if (reports.empty()) {
                 response = CreateErrorResponse("No financial reports found or API key/limit errors.");
@@ -123,7 +125,7 @@ std::string RequestHandler::HandleRequest(const std::string& request_str) {
         } else if (command == "SEARCH_TICKER") {
             std::string query = GetStringParam(req, "query");
 
-            auto results = service_->SearchTicker(query);
+            auto results = co_await service_->SearchTicker(query);
 
             if (results.empty()) {
                 response = CreateErrorResponse("No ticker found or API key/limit errors.");
@@ -142,7 +144,7 @@ std::string RequestHandler::HandleRequest(const std::string& request_str) {
         } else if (command == "GET_CRYPTO_PRICE") {
             std::string ticker = GetStringParam(req, "ticker");
 
-            auto price = service_->GetCryptoPrice(ticker);
+            auto price = co_await service_->GetCryptoPrice(ticker);
             
             if (price.has_value()) {
                 response = CreateSuccessResponse();
@@ -154,7 +156,7 @@ std::string RequestHandler::HandleRequest(const std::string& request_str) {
         } else if (command == "GET_CRYPTO_INFO") {
             std::string ticker = GetStringParam(req, "ticker");
 
-            auto info = service_->GetCryptoAssetInfo(ticker);
+            auto info = co_await service_->GetCryptoAssetInfo(ticker);
             
             if (info.has_value()) {
                 response = CreateSuccessResponse();
@@ -170,7 +172,7 @@ std::string RequestHandler::HandleRequest(const std::string& request_str) {
             Timestamp to = TimeUtils::StringToTimestamp(GetStringParam(req, "to"));
             TimeFrame interval = ParseInterval(GetStringParam(req, "interval"));
 
-            auto history = service_->GetCryptoHistory(ticker, from, to, interval);
+            auto history = co_await service_->GetCryptoHistory(ticker, from, to, interval);
 
             if (history.empty()) {
                 response = CreateErrorResponse("No history data found or parameters unsupported by providers.");
@@ -193,10 +195,10 @@ std::string RequestHandler::HandleRequest(const std::string& request_str) {
         } else if (command == "GET_CRYPTO_TOP") {
             int limit = req.value("limit", 50);
 
-            auto top = service_->GetTopCryptoAssets(limit);
+            auto top = co_await service_->GetTopCryptoAssets(limit);
 
             if (top.empty()) {
-                response = CreateErrorResponse("No history data found or parameters unsupported by providers.");
+                response = CreateErrorResponse("No data found or parameters unsupported by providers.");
             } else {
                 json top_json = json::array();
                 for (const auto& item : top) {
@@ -207,18 +209,24 @@ std::string RequestHandler::HandleRequest(const std::string& request_str) {
                 response["data"] = top_json;
             }
         } else {
-            Logger::Warn("[RequestHandler] Unknown command received: {}", command);
+            Logger::Warn(
+                "[RequestHandler] Unknown command received: {}", 
+                command);
             response = CreateErrorResponse("Unknown command: " + command);
         }
     } catch (const json::exception& ex) {
-        Logger::Error("[RequestHandler] JSON Parsing Error: {}", ex.what());
+        Logger::Error(
+            "[RequestHandler] JSON Parsing Error: {}", 
+            ex.what());
         response = CreateErrorResponse(std::string("Invalid JSON format: ") + ex.what());
     } catch (const std::exception& ex) {
-        Logger::Error("[RequestHandler] Processing Error: {}", ex.what());
+        Logger::Error(
+            "[RequestHandler] Processing Error: {}", 
+            ex.what());
         response = CreateErrorResponse(std::string("Internal server error: ") + ex.what());
     }
 
-    return response.dump() + "\n";
+    co_return response.dump() + "\n";
 }
 
 json RequestHandler::CreateSuccessResponse() {

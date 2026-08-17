@@ -16,9 +16,12 @@ class Logger {
 public:
     static void InitConsole(const std::string& pattern = "%^[%l] %v%$");
 
-    static void InitFile(const std::string& path, const std::string& level_str,
-                            size_t max_size = 1024 * 1024 * 5, size_t max_files = 5,
-                            const std::string& pattern = "[%Y-%m-%d %H:%M:%S] [%l] %v");
+    static void InitFile(
+        const std::string& path, 
+        const std::string& level_str,
+        size_t max_size = 1024 * 1024 * 5, 
+        size_t max_files = 5,
+        const std::string& pattern = "[%Y-%m-%d %H:%M:%S] [%l] %v");
 
     template <typename... Args>
     static void Info(spdlog::format_string_t<Args...> fmt, Args&&... args) {

@@ -19,7 +19,9 @@ TwelveDataProvider::TwelveDataProvider(std::shared_ptr<IHttpClient> client,
             } else if (crypto_cap.has_value()) {
                 crypto_caps_.insert(crypto_cap.value());
             } else {
-                Logger::Warn("[TwelveData] Unknown capability '{}' in config", s);
+                Logger::Warn(
+                    "[TwelveData] Unknown capability '{}' in config", 
+                    s);
             }
         }
     }
@@ -36,50 +38,52 @@ bool TwelveDataProvider::HasCapability(const CryptoCapability cap) const {
     return crypto_caps_.contains(cap);
 }
 
-int TwelveDataProvider::GetRemainingRequests() const { return -1; } // ToDo
+boost::asio::awaitable<int> TwelveDataProvider::GetRemainingRequests() const { co_return -1; } // ToDo
 
-std::optional<double> TwelveDataProvider::GetStockPrice(const std::string& ticker) {
+boost::asio::awaitable<std::optional<double>> TwelveDataProvider::GetStockPrice(const std::string& ticker) {
     if (!HasCapability(ProviderCapability::PriceRealtime) && 
             !HasCapability(ProviderCapability::PriceIntraday)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformGet("/price", {{"symbol", ticker}});
+    auto json_opt = co_await PerformGetAsync("/price", {{"symbol", ticker}});
     
     if (!json_opt.has_value() || !json_opt->contains("price")) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     double price = ParseDoubleSafe((json_opt.value())["price"].get<std::string>());
     if (price == 0.0) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
-    return price;
+    co_return price;
 
 }
 
-std::vector<StockPriceCandle> TwelveDataProvider::GetStockHistory(const std::string& ticker, 
-                                                                    const Timestamp from, 
-                                                                    const Timestamp to, 
-                                                                    const TimeFrame interval) {
+boost::asio::awaitable<std::vector<StockPriceCandle>> TwelveDataProvider::GetStockHistory(
+        const std::string& ticker, 
+        const Timestamp from, 
+        const Timestamp to, 
+        const TimeFrame interval) {
     if (!HasCapability(ProviderCapability::PriceIntraday) && 
         !HasCapability(ProviderCapability::PriceDaily)) {
-        return {};
+        co_return std::vector<StockPriceCandle>{};
     }
 
-    return FetchHistory<StockPriceCandle>(ticker, interval, 
+    co_return co_await FetchHistory<StockPriceCandle>(ticker, interval, 
                                             [this](const nlohmann::json& j) { return ParseStockCandle(j); });
 }
 
-std::optional<CompanyFullInfo> TwelveDataProvider::GetCompanyProfile(const std::string& ticker) {
+boost::asio::awaitable<std::optional<CompanyFullInfo>> TwelveDataProvider::GetCompanyProfile(
+        const std::string& ticker) {
     if (!HasCapability(ProviderCapability::CompanyProfile)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformGet("/profile", {{"symbol", ticker}});
+    auto json_opt = co_await PerformGetAsync("/profile", {{"symbol", ticker}});
 
     if (!json_opt.has_value() || !json_opt->contains("symbol")) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     try {
@@ -96,27 +100,31 @@ std::optional<CompanyFullInfo> TwelveDataProvider::GetCompanyProfile(const std::
         info.description = j.value("description", "");
         info.updated_at = std::chrono::system_clock::now();
 
-        return info;
+        co_return info;
     } catch (const std::exception& ex) { 
-        Logger::Error("[TwelveData] Profile parse error for {}: {}", ticker, ex.what());
-        return std::nullopt; 
+        Logger::Error(
+            "[TwelveData] Profile parse error for {}: {}", 
+            ticker, ex.what());
+        co_return std::nullopt; 
     }
 }
 
-std::vector<StockDividends> TwelveDataProvider::GetDividends(const std::string& ticker, 
-                                                                const Date from, const Date to) {
+boost::asio::awaitable<std::vector<StockDividends>> TwelveDataProvider::GetDividends(
+        const std::string& ticker, 
+        const Date from, 
+        const Date to) {
     if (!HasCapability(ProviderCapability::Dividends)) {
-        return {};
+        co_return std::vector<StockDividends>{};
     }
 
-    auto json_opt = PerformGet("/dividends", {
+    auto json_opt = co_await PerformGetAsync("/dividends", {
                                 {"symbol", ticker},
                                 {"start_date", TimeUtils::DateToString(from)},
                                 {"end_date", TimeUtils::DateToString(to)}
                             });
 
     if (!json_opt.has_value() || !json_opt->contains("dividends")) {
-        return {};
+        co_return std::vector<StockDividends>{};
     }
 
     std::vector<StockDividends> result;
@@ -133,16 +141,19 @@ std::vector<StockDividends> TwelveDataProvider::GetDividends(const std::string& 
             result.push_back(div);
         }
     } catch (const std::exception& ex) { 
-        Logger::Error("[TwelveData] Failed to parse Dividends for {}: {}", ticker, ex.what());
+        Logger::Error(
+            "[TwelveData] Failed to parse Dividends for {}: {}", 
+            ticker, ex.what());
     }
-    return result;
+    co_return result;
 }
 
-std::vector<TickerSearchResult> TwelveDataProvider::SearchStockTicker(const std::string& ticker) {
-    auto json_opt = PerformGet("/symbol_search", {{"symbol", ticker}});
+boost::asio::awaitable<std::vector<TickerSearchResult>> TwelveDataProvider::SearchStockTicker(
+        const std::string& ticker) {
+    auto json_opt = co_await PerformGetAsync("/symbol_search", {{"symbol", ticker}});
 
     if (!json_opt.has_value() || !json_opt->contains("data")) {
-        return {};
+        co_return std::vector<TickerSearchResult>{};
     }
     
     std::vector<TickerSearchResult> results;
@@ -150,7 +161,7 @@ std::vector<TickerSearchResult> TwelveDataProvider::SearchStockTicker(const std:
         const auto& data = (json_opt.value())["data"];
         
         if (!data.is_array()) {
-            return {};
+            co_return std::vector<TickerSearchResult>{};
         }
 
         results.reserve(data.size());
@@ -169,38 +180,45 @@ std::vector<TickerSearchResult> TwelveDataProvider::SearchStockTicker(const std:
             results.push_back(res);
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[TwelveData] Search parse error: {}", ex.what());
+        Logger::Error(
+            "[TwelveData] Search parse error: {}", 
+            ex.what());
     }
-    return results;
+    co_return results;
 }
 
-std::optional<double> TwelveDataProvider::GetCryptoPrice(const std::string& ticker) {
+boost::asio::awaitable<std::optional<double>> TwelveDataProvider::GetCryptoPrice(
+        const std::string& ticker) {
     if (!HasCapability(CryptoCapability::RealtimePrice)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
     
-    return GetStockPrice(ticker); 
+    co_return co_await GetStockPrice(ticker); 
 }
 
-std::vector<CryptoPriceCandle> TwelveDataProvider::GetCryptoHistory(const std::string& ticker, const Timestamp from, 
-                                                                        const Timestamp to, const TimeFrame interval) {
+boost::asio::awaitable<std::vector<CryptoPriceCandle>> TwelveDataProvider::GetCryptoHistory(
+        const std::string& ticker, 
+        const Timestamp from, 
+        const Timestamp to, 
+        const TimeFrame interval) {
     if (!HasCapability(CryptoCapability::History)) {
-        return {};
+        co_return std::vector<CryptoPriceCandle>{};
     }
 
-    return FetchHistory<CryptoPriceCandle>(ticker, interval, 
+    co_return co_await FetchHistory<CryptoPriceCandle>(ticker, interval, 
                                                 [this](const nlohmann::json& j) { return ParseCryptoCandle(j); });
 }
 
-std::optional<CryptoAsset> TwelveDataProvider::GetCryptoAssetInfo(const std::string& ticker) {
+boost::asio::awaitable<std::optional<CryptoAsset>> TwelveDataProvider::GetCryptoAssetInfo(
+        const std::string& ticker) {
     if (!HasCapability(CryptoCapability::Metadata)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformGet("/profile", {{"symbol", ticker}});
+    auto json_opt = co_await PerformGetAsync("/profile", {{"symbol", ticker}});
 
     if (!json_opt.has_value() || !json_opt->contains("symbol")) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     try {
@@ -209,18 +227,21 @@ std::optional<CryptoAsset> TwelveDataProvider::GetCryptoAssetInfo(const std::str
         asset.ticker = (json_opt.value())["symbol"];
         asset.name = (json_opt.value()).value("name", asset.ticker); 
 
-        return asset;
+        co_return asset;
     } catch (const std::exception& ex) { 
-        Logger::Error("[TwelveData] Crypto Profile parse error for {}: {}", ticker, ex.what());
-        return std::nullopt; 
+        Logger::Error(
+            "[TwelveData] Crypto Profile parse error for {}: {}",
+            ticker, ex.what());
+        co_return std::nullopt; 
     }
 }
 
-std::vector<CryptoAsset> TwelveDataProvider::SearchAsset(const std::string& query) {
-    auto json_opt = PerformGet("/symbol_search", {{"symbol", query}});
+boost::asio::awaitable<std::vector<CryptoAsset>> TwelveDataProvider::SearchAsset(
+        const std::string& query) {
+    auto json_opt = co_await PerformGetAsync("/symbol_search", {{"symbol", query}});
 
     if (!json_opt.has_value() || !json_opt->contains("data")) {
-        return {};
+        co_return std::vector<CryptoAsset>{};
     }
     
     std::vector<CryptoAsset> results;
@@ -228,7 +249,7 @@ std::vector<CryptoAsset> TwelveDataProvider::SearchAsset(const std::string& quer
         const auto& data = (json_opt.value())["data"];
         
         if (!data.is_array()) {
-            return {};
+            co_return std::vector<CryptoAsset>{};
         }
 
         results.reserve(data.size());
@@ -246,94 +267,125 @@ std::vector<CryptoAsset> TwelveDataProvider::SearchAsset(const std::string& quer
             results.push_back(asset);
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[TwelveData] Crypto Search parse error: {}", ex.what());
+        Logger::Error(
+            "[TwelveData] Crypto Search parse error: {}", 
+            ex.what());
     }
-    return results;
+    co_return results;
 }
 
-std::vector<CompanyFinancialReport> TwelveDataProvider::GetFinancialReports(const std::string&) { 
+boost::asio::awaitable<std::vector<CompanyFinancialReport>> TwelveDataProvider::GetFinancialReports(
+        const std::string&) { 
     if (HasCapability(ProviderCapability::FinancialsDeep)) {
-        Logger::Warn("[TwelveData] Financials not implemented.");
+        Logger::Warn(
+            "[TwelveData] Financials not implemented.");
     }
-    return {}; 
+    co_return std::vector<CompanyFinancialReport>{}; 
 }
 
-std::vector<InsiderTransaction> TwelveDataProvider::GetInsiderTransactions(const std::string&, int) { 
+boost::asio::awaitable<std::vector<InsiderTransaction>> TwelveDataProvider::GetInsiderTransactions(
+        const std::string&, int) { 
     if (HasCapability(ProviderCapability::Insiders)) {
-        Logger::Warn("[TwelveData] Insiders not implemented.");
+        Logger::Warn(
+            "[TwelveData] Insiders not implemented.");
     }
-    return {}; 
+    co_return std::vector<InsiderTransaction>{}; 
 }
 
-std::optional<AnalystRating> TwelveDataProvider::GetAnalystRatings(const std::string&) { 
+boost::asio::awaitable<std::optional<AnalystRating>> TwelveDataProvider::GetAnalystRatings(
+        const std::string&) { 
     if (HasCapability(ProviderCapability::AnalystRatings)) {
-        Logger::Warn("[TwelveData] Ratings not implemented.");
+        Logger::Warn(
+            "[TwelveData] Ratings not implemented.");
     }
-    return std::nullopt; 
+    co_return std::nullopt; 
 }
 
-std::map<std::string, double> TwelveDataProvider::GetTechnicalIndicator(const std::string&, const TechIndicatorType, 
-                                                                            const TimeFrame) { 
+boost::asio::awaitable<std::map<std::string, double>> TwelveDataProvider::GetTechnicalIndicator(
+        const std::string&, 
+        const TechIndicatorType, 
+        const TimeFrame) { 
     if (HasCapability(ProviderCapability::TechIndicators)) {
-        Logger::Warn("[TwelveData] TechIndicators not implemented.");
+        Logger::Warn(
+            "[TwelveData] TechIndicators not implemented.");
     }
-    return {}; 
+    co_return std::map<std::string, double>{}; 
 }
 
-std::vector<MarketNews> TwelveDataProvider::GetCompanyNews(const std::string&, const int) { 
+boost::asio::awaitable<std::vector<MarketNews>> TwelveDataProvider::GetCompanyNews(
+        const std::string&, 
+        const int) { 
     if (HasCapability(ProviderCapability::News)) {
-        Logger::Warn("[TwelveData] CompanyNews not implemented.");
+        Logger::Warn(
+            "[TwelveData] CompanyNews not implemented.");
     }
-    return {}; 
+    co_return std::vector<MarketNews>{}; 
 }
 
-std::vector<MarketNews> TwelveDataProvider::GetMarketNews(const std::string&, const int) { 
+boost::asio::awaitable<std::vector<MarketNews>> TwelveDataProvider::GetMarketNews(
+        const std::string&, 
+        const int) { 
     if (HasCapability(ProviderCapability::News)) {
-        Logger::Warn("[TwelveData] MarketNews not implemented.");
+        Logger::Warn(
+            "[TwelveData] MarketNews not implemented.");
     }
-    return {}; 
+    co_return std::vector<MarketNews>{}; 
 }
 
-std::vector<CalendarEvent> TwelveDataProvider::GetEarningsCalendar(const Date, const Date) { 
+boost::asio::awaitable<std::vector<CalendarEvent>> TwelveDataProvider::GetEarningsCalendar(
+        const Date, 
+        const Date) { 
     if (HasCapability(ProviderCapability::Earnings)) {
-        Logger::Warn("[TwelveData] Earnings not implemented.");
+        Logger::Warn(
+            "[TwelveData] Earnings not implemented.");
     }
-    return {}; 
+    co_return std::vector<CalendarEvent>{}; 
 }
 
-std::vector<EconomicIndicator> TwelveDataProvider::GetMacroIndicator(const MacroIndicatorType) { 
+boost::asio::awaitable<std::vector<EconomicIndicator>> TwelveDataProvider::GetMacroIndicator(
+        const MacroIndicatorType) { 
     if (HasCapability(ProviderCapability::MacroEconomics)) {
-        Logger::Warn("[TwelveData] MacroIndicator not implemented.");
+        Logger::Warn(
+            "[TwelveData] MacroIndicator not implemented.");
     }
-    return {}; 
+    co_return std::vector<EconomicIndicator>{}; 
 }
 
-std::vector<StockSplit> TwelveDataProvider::GetStockSplits(const std::string&, const Date, const Date) {
+boost::asio::awaitable<std::vector<StockSplit>> TwelveDataProvider::GetStockSplits(
+        const std::string&, 
+        const Date, 
+        const Date) {
     if (HasCapability(ProviderCapability::StockSplits)) {
-        Logger::Warn("[TwelveData] Stock Splits not implemented.");
+        Logger::Warn(
+            "[TwelveData] Stock Splits not implemented.");
     }
-    return {};
+    co_return std::vector<StockSplit>{};
 }
 
-std::optional<GlobalCryptoMetrics> TwelveDataProvider::GetGlobalMetrics() { 
+boost::asio::awaitable<std::optional<GlobalCryptoMetrics>> TwelveDataProvider::GetGlobalMetrics() { 
     if (HasCapability(CryptoCapability::GlobalMetrics)) {
-        Logger::Warn("[TwelveData] CryptoGlobal not implemented.");
+        Logger::Warn(
+            "[TwelveData] CryptoGlobal not implemented.");
     }
-    return std::nullopt; 
+    co_return std::nullopt; 
 }
 
-std::vector<CryptoAsset> TwelveDataProvider::GetCryptoTopList(int) { 
+boost::asio::awaitable<std::vector<CryptoAsset>> TwelveDataProvider::GetCryptoTopList(int) { 
     if (HasCapability(CryptoCapability::TopList)) {
-        Logger::Warn("[TwelveData] CryptoTopList not implemented.");
+        Logger::Warn(
+            "[TwelveData] CryptoTopList not implemented.");
     }
-    return {}; 
+    co_return std::vector<CryptoAsset>{}; 
 }
 
-std::optional<OrderBook> TwelveDataProvider::GetOrderBook(const std::string&, const int) { 
+boost::asio::awaitable<std::optional<OrderBook>> TwelveDataProvider::GetOrderBook(
+        const std::string&, 
+        const int) { 
     if (HasCapability(CryptoCapability::OrderBook)) {
-        Logger::Warn("[TwelveData] CryptoBook not implemented.");
+        Logger::Warn(
+            "[TwelveData] CryptoBook not implemented.");
     }
-    return std::nullopt; 
+    co_return std::nullopt; 
 }
 
 std::string TwelveDataProvider::ConvertInterval(const TimeFrame tf) {
@@ -358,8 +410,10 @@ std::string TwelveDataProvider::ConvertInterval(const TimeFrame tf) {
 }
 
 template <typename T>
-std::vector<T> TwelveDataProvider::FetchHistory(const std::string& symbol, const TimeFrame interval,
-                                                    std::function<T(const nlohmann::json&)> parser) {
+boost::asio::awaitable<std::vector<T>> TwelveDataProvider::FetchHistory(
+        const std::string& symbol, 
+        const TimeFrame interval,
+        std::function<T(const nlohmann::json&)> parser) {
     std::map<std::string, std::string> params = {
         {"symbol", symbol},
         {"interval", ConvertInterval(interval)},
@@ -367,13 +421,15 @@ std::vector<T> TwelveDataProvider::FetchHistory(const std::string& symbol, const
         {"order", "DESC"}      
     };
 
-    auto json_opt = PerformGet("/time_series", params);
+    auto json_opt = co_await PerformGetAsync("/time_series", params);
     
     if (!json_opt.has_value() || !json_opt->contains("values")) {
         if (json_opt.has_value() && json_opt->contains("status") && (json_opt.value())["status"] == "error") {
-            Logger::Warn("TwelveData Error for {}: {}", symbol, (json_opt.value())["message"].get<std::string>());
+            Logger::Warn(
+                "TwelveData Error for {}: {}", 
+                symbol, (json_opt.value())["message"].template get<std::string>());
         }
-        return {};
+        co_return std::vector<T>{};
     }
 
     std::vector<T> results;
@@ -381,7 +437,7 @@ std::vector<T> TwelveDataProvider::FetchHistory(const std::string& symbol, const
         const auto& values = (json_opt.value())["values"];
         
         if (!values.is_array()) {
-            return {};
+            co_return std::vector<T>{};
         }
 
         results.reserve(values.size());
@@ -390,11 +446,13 @@ std::vector<T> TwelveDataProvider::FetchHistory(const std::string& symbol, const
             results.push_back(parser(item));
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[TwelveData] Parsing history failed for {}: {}", symbol, ex.what());
+        Logger::Error(
+            "[TwelveData] Parsing history failed for {}: {}", 
+            symbol, ex.what());
     }
 
     std::reverse(results.begin(), results.end());
-    return results;
+    co_return results;
 }
 
 StockPriceCandle TwelveDataProvider::ParseStockCandle(const nlohmann::json& item) {

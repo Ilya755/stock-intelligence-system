@@ -38,6 +38,7 @@ struct DatabaseConfig {
     int port;
     std::string username;
     std::string password;
+    int pool_size = 4;
 };
 
 

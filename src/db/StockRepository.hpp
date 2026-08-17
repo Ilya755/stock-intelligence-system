@@ -11,56 +11,86 @@ class StockRepository {
 public:
     explicit StockRepository(Database& db);
 
-    void SaveCompany(const CompanyFullInfo& company);
+    boost::asio::awaitable<void> SaveCompanyAsync(CompanyFullInfo company);
 
-    void SaveCompaniesBatch(const std::vector<CompanyFullInfo>& companies);
+    boost::asio::awaitable<void> SaveCompaniesBatchAsync(
+        std::vector<CompanyFullInfo> companies);
 
-    void SaveCompanyFinancialReport(const int company_id, const CompanyFinancialReport& fin_rep);
+    boost::asio::awaitable<void> SaveCompanyFinancialReportAsync(
+        int company_id, 
+        CompanyFinancialReport report);
 
-    void SaveCompanyFinancialReportsBatch(const int company_id,
-                                            const std::vector<CompanyFinancialReport>& fin_reps);
+    boost::asio::awaitable<void> SaveCompanyFinancialReportsBatchAsync(
+        int company_id, 
+        std::vector<CompanyFinancialReport> financial_reports);
 
-    void SaveStockDividends(const int company_id, const StockDividends& dividends);
+    boost::asio::awaitable<void> SaveStockDividendsAsync(
+        int company_id, 
+        StockDividends dividends);
 
-    void SaveStockDividendsBatch(const int company_id, const std::vector<StockDividends>& dividends); 
+    boost::asio::awaitable<void> SaveStockDividendsBatchAsync(
+        int company_id, 
+        std::vector<StockDividends> dividends); 
 
-    void SaveStockPrice(const int company_id, const StockPriceCandle& stock_price);
+    boost::asio::awaitable<void> SaveStockPriceAsync(
+        int company_id, 
+        StockPriceCandle stock_price);
 
-    void SaveStockPricesBatch(const int company_id, const std::vector<StockPriceCandle>& prices);
+    boost::asio::awaitable<void> SaveStockPricesBatchAsync(
+        int company_id, 
+        std::vector<StockPriceCandle> prices);
 
-    void SaveStockSplit(const int company_id, const StockSplit& split);
+    boost::asio::awaitable<void> SaveStockSplitAsync(int company_id, StockSplit split);
 
-    void SaveStockSplitsBatch(const int company_id, const std::vector<StockSplit>& splits);
+    boost::asio::awaitable<void> SaveStockSplitsBatchAsync(
+        int company_id, 
+        std::vector<StockSplit> splits);
 
-    std::vector<StockPriceCandle> GetHistoryStockPrices(const int company_id, 
-                                                            const Timestamp from, const Timestamp to);
+    boost::asio::awaitable<std::vector<StockPriceCandle>> GetHistoryStockPricesAsync(
+        int company_id, 
+        Timestamp from, 
+        Timestamp to);
 
-    std::optional<int> GetCompanyId(const std::string& ticker);
+    boost::asio::awaitable<std::optional<int>> GetCompanyIdAsync(std::string ticker);
 
-    std::optional<CompanyFullInfo> GetCompanyByTicker(const std::string& ticker); 
+    boost::asio::awaitable<std::optional<CompanyFullInfo>> GetCompanyByTickerAsync(
+        std::string ticker); 
 
-    std::vector<CompanyPreview> GetAllCompaniesPreview(); 
+    boost::asio::awaitable<std::vector<CompanyPreview>> GetAllCompaniesPreviewAsync(); 
 
-    std::optional<StockPriceCandle> GetLastStockPrice(int company_id);
+    boost::asio::awaitable<std::optional<StockPriceCandle>> GetLastStockPriceAsync(
+        int company_id);
 
-    std::vector<StockDividends> GetDividends(int company_id, const Date from, const Date to);
+    boost::asio::awaitable<std::vector<StockDividends>> GetDividendsAsync(
+        int company_id, 
+        Date from, 
+        Date to);
+        
+    boost::asio::awaitable<std::vector<CompanyFinancialReport>> GetFinancialReportsAsync(
+        int company_id);
+ 
+    boost::asio::awaitable<std::optional<Timestamp>> GetLastUpdateAsync(
+        int company_id, 
+        std::string data_type);
 
-    std::vector<CompanyFinancialReport> GetFinancialReports(int company_id);
 
-    void UpdateCompanyDescription(int company_id, const std::string& description);
+    boost::asio::awaitable<void> UpdateCompanyDescriptionAsync(
+        int company_id, 
+        std::string description);
 
-    void DeleteCompany(int company_id);
+    boost::asio::awaitable<void> DeleteCompanyAsync(int company_id);
 
-    void DeleteOldPrices(int company_id, const Timestamp older_than);
+    boost::asio::awaitable<void> DeleteOldPricesAsync(
+        int company_id, 
+        Timestamp older_than);
 
-    std::optional<Timestamp> GetLastUpdate(int company_id, const std::string& data_type);
 
-    void SetLastUpdate(int company_id, const std::string& data_type);
+    boost::asio::awaitable<void> SetLastUpdateAsync(int company_id, std::string data_type);
 
 private:
     Database& db_;
 
-    std::string ReportTypeToString(const ReportType type);
+    static std::string ReportTypeToString(ReportType type);
 
-    ReportType StringToReportType(const std::string& str);
+    static ReportType StringToReportType(const std::string& value);
 };

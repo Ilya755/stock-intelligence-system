@@ -26,21 +26,24 @@ public:
 
     bool HasCapability(const CryptoCapability cap) const override;
 
-    std::optional<double> GetCryptoPrice(const std::string& ticker) override;
+    boost::asio::awaitable<std::optional<double>> GetCryptoPrice(const std::string& ticker) override;
 
-    std::optional<CryptoAsset> GetCryptoAssetInfo(const std::string& ticker) override;
+    boost::asio::awaitable<std::optional<CryptoAsset>> GetCryptoAssetInfo(
+        const std::string& ticker) override;
 
-    std::vector<CryptoAsset> GetCryptoTopList(const int limit) override;
+    boost::asio::awaitable<std::vector<CryptoAsset>> GetCryptoTopList(const int limit) override;
 
-    std::vector<CryptoPriceCandle> GetCryptoHistory(const std::string& ticker, 
-                                                        const Timestamp from, const Timestamp to, 
-                                                        const TimeFrame interval) override;
+    boost::asio::awaitable<std::vector<CryptoPriceCandle>> GetCryptoHistory(
+        const std::string& ticker, 
+        const Timestamp from, 
+        const Timestamp to, 
+        const TimeFrame interval) override;
 
-    std::vector<CryptoAsset> SearchAsset(const std::string& query) override;
+    boost::asio::awaitable<std::vector<CryptoAsset>> SearchAsset(const std::string& query) override;
 
-    std::optional<GlobalCryptoMetrics> GetGlobalMetrics() override;
+    boost::asio::awaitable<std::optional<GlobalCryptoMetrics>> GetGlobalMetrics() override;
 
-    std::optional<OrderBook> GetOrderBook(const std::string&, const int) override;
+    boost::asio::awaitable<std::optional<OrderBook>> GetOrderBook(const std::string&, const int) override;
     
 private:
     std::string name_;

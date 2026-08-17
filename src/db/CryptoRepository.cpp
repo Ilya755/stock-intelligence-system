@@ -1,354 +1,349 @@
 #include "CryptoRepository.hpp"
 
-#include <tuple>
-#include <optional>
-#include <vector>
+#include <format>
+#include <string>
+#include <utility>
 
-#include "pqxx/pqxx"
+#include "nlohmann/json.hpp"
 
 #include "../common/TimeUtils.hpp"
 #include "../common/Logger.hpp"
+
+namespace {
+
+std::string Text(const PgResult& result, int row, int column) {
+    return std::string(result.Value(row, column));
+}
+
+PgParam Param(int value) {
+    return std::to_string(value);
+}
+
+PgParam Param(double value) {
+    return std::format("{}", value);
+}
+
+PgParam Param(std::string value) {
+    return value;
+}
+
+}
 
 CryptoRepository::CryptoRepository(Database& db)
     : db_(db)
     {}
 
-void CryptoRepository::SaveCryptoAsset(const CryptoAsset& crypto_asset) {
+boost::asio::awaitable<void> CryptoRepository::SaveCryptoAssetAsync(
+        CryptoAsset crypto_asset) {
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec_params(
+        co_await db_.Query(
             "INSERT INTO crypto_assets(ticker, name, updated_at) "
             "VALUES ($1, $2, NOW()) "
             "ON CONFLICT (ticker) DO UPDATE "
             "SET name = EXCLUDED.name, updated_at = NOW()",
-            crypto_asset.ticker, crypto_asset.name
-        );
+            {Param(crypto_asset.ticker), Param(crypto_asset.name)});
 
-        txn.commit();
-        Logger::Debug("[CryptoRepository] Cryptocurrency asset {} saved", crypto_asset.ticker);
+        Logger::Debug(
+            "[CryptoRepository] Cryptocurrency asset {} saved", 
+            crypto_asset.ticker);
     } catch (const std::exception& ex) {
-        Logger::Error("[CryptoRepository] Failed to save cryptocurrency asset {}: {}",
-                        crypto_asset.ticker, ex.what());
+        Logger::Error(
+            "[CryptoRepository] Failed to save cryptocurrency asset {}: {}",
+            crypto_asset.ticker, ex.what());
     }
 }
 
-void CryptoRepository::SaveCryptoAssetsBatch(const std::vector<CryptoAsset>& crypto_assets) {
+boost::asio::awaitable<void> CryptoRepository::SaveCryptoAssetsBatchAsync(
+        std::vector<CryptoAsset> crypto_assets) {
+    if (crypto_assets.empty()) {
+        co_return;
+    }
+
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec(
-            "CREATE TEMP TABLE temp_crypto_assets ON COMMIT DROP AS "
-            "SELECT ticker, name, updated_at "
-            "FROM crypto_assets "
-            "LIMIT 0"
-        );
-
-        auto stream = pqxx::stream_to::table(
-                            txn,
-                            {"temp_crypto_assets"},
-                            {"ticker", "name", "updated_at"}
-                        );
-        
-        std::string now_str = TimeUtils::TimestampToString(std::chrono::system_clock::now());
-
-        for (const auto& crypto_asset : crypto_assets) {
-            stream << std::make_tuple(crypto_asset.ticker, crypto_asset.name, now_str);
+        nlohmann::json rows = nlohmann::json::array();
+        const auto now = TimeUtils::TimestampToString(std::chrono::system_clock::now());
+        for (const auto& asset : crypto_assets) {
+            rows.push_back({
+                {"ticker", asset.ticker},
+                {"name", asset.name},
+                {"updated_at", now}
+            });
         }
 
-        stream.complete();
-
-        txn.exec(
-            "INSERT INTO crypto_assets (ticker, name, updated_at) "
-            "SELECT * FROM temp_crypto_assets "
+        co_await db_.Query(
+            "INSERT INTO crypto_assets(ticker, name, updated_at) "
+            "SELECT ticker, name, updated_at "
+            "FROM jsonb_to_recordset($1::jsonb) "
+            "AS x(ticker text, name text, updated_at timestamp) "
             "ON CONFLICT (ticker) DO UPDATE "
-            "SET name = EXCLUDED.name, updated_at = EXCLUDED.updated_at"
-        );
+            "SET name = EXCLUDED.name, updated_at = EXCLUDED.updated_at",
+            {Param(rows.dump())});
 
-        txn.commit();
-        Logger::Debug("[CryptoRepository] Batch insert cryptocurrency assets completed");
+        Logger::Debug(
+            "[CryptoRepository] Batch insert cryptocurrency assets completed");
     } catch (const std::exception& ex) {
-        Logger::Error("[CryptoRepository] Batch insert cryptocurrency assets failed: {}", ex.what());
+        Logger::Error(
+            "[CryptoRepository] Batch insert cryptocurrency assets failed: {}", 
+            ex.what());
     }
 }
 
-void CryptoRepository::SaveCryptoPrice(const int asset_id, const CryptoPriceCandle& crypto_price) {
+boost::asio::awaitable<void> CryptoRepository::SaveCryptoPriceAsync(
+        int asset_id, 
+        CryptoPriceCandle crypto_price) {
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec_params(
-            "INSERT INTO crypto_prices(asset_id, timestamp, "
-            "open, high, low, close, volume) "
+        co_await db_.Query(
+            "INSERT INTO crypto_prices(asset_id, timestamp, open, high, low, close, volume) "
             "VALUES ($1, $2, $3, $4, $5, $6, $7) "
             "ON CONFLICT (asset_id, timestamp) DO NOTHING",
-            asset_id, TimeUtils::TimestampToString(crypto_price.timestamp), 
-            crypto_price.open, crypto_price.high, crypto_price.low, 
-            crypto_price.close, crypto_price.volume
-        );
+            {
+                Param(asset_id),
+                Param(TimeUtils::TimestampToString(crypto_price.timestamp)),
+                Param(crypto_price.open),
+                Param(crypto_price.high),
+                Param(crypto_price.low),
+                Param(crypto_price.close),
+                Param(crypto_price.volume)
+            });
 
-        txn.commit();
-        Logger::Debug("[CryptoRepository] Price of cryptocurrnecy asset with id {} saved", asset_id);
+        Logger::Debug(
+            "[CryptoRepository] Price of cryptocurrnecy asset with id {} saved", 
+            asset_id);
     } catch (const std::exception& ex) {
-        Logger::Error("[CryptoRepository] Failed to save price of cryptocurrency asset with id {}: {}",
-                        asset_id, ex.what());
+        Logger::Error(
+            "[CryptoRepository] Failed to save price of cryptocurrency asset with id {}: {}",
+            asset_id, ex.what());
     }
 }
 
-void CryptoRepository::SaveCryptoPricesBatch(const int asset_id, 
-                                                const std::vector<CryptoPriceCandle>& prices) {
+boost::asio::awaitable<void> CryptoRepository::SaveCryptoPricesBatchAsync(
+        int asset_id, 
+        std::vector<CryptoPriceCandle> prices) {
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec(
-            "CREATE TEMP TABLE temp_crypto_prices ON COMMIT DROP AS "
-            "SELECT asset_id, timestamp, open, high, low, close, volume "
-            "FROM crypto_prices "
-            "LIMIT 0"
-        );
-
-        auto stream = pqxx::stream_to::table(
-                            txn, 
-                            {"temp_crypto_prices"}, 
-                            {"asset_id", "timestamp", "open", "high", "low", "close", "volume"}
-                        );
-
+        nlohmann::json rows = nlohmann::json::array();
         for (const auto& candle : prices) {
-            stream << std::make_tuple(asset_id, TimeUtils::TimestampToString(candle.timestamp),
-                                        candle.open, candle.high, candle.low, candle.close, 
-                                        candle.volume);
+            rows.push_back({
+                {"asset_id", asset_id},
+                {"timestamp", TimeUtils::TimestampToString(candle.timestamp)},
+                {"open", candle.open},
+                {"high", candle.high},
+                {"low", candle.low},
+                {"close", candle.close},
+                {"volume", candle.volume}
+            });
         }
 
-        stream.complete();
+        co_await db_.Query(
+            "INSERT INTO crypto_prices(asset_id, timestamp, open, high, low, close, volume) "
+            "SELECT asset_id, timestamp, open, high, low, close, volume "
+            "FROM jsonb_to_recordset($1::jsonb) "
+            "AS x(asset_id int, timestamp timestamp, open numeric, high numeric, "
+            "low numeric, close numeric, volume numeric) "
+            "ON CONFLICT (asset_id, timestamp) DO NOTHING",
+            {Param(rows.dump())});
 
-        txn.exec(
-            "INSERT INTO crypto_prices (asset_id, timestamp, open, "
-            "high, low, close, volume) "
-            "SELECT * FROM temp_crypto_prices "
-            "ON CONFLICT (asset_id, timestamp) DO NOTHING"
-        );
-
-        txn.commit();
-        Logger::Debug("[CryptoRepository] Batch insert for asset_id {} finished", asset_id);
+        Logger::Debug(
+            "[CryptoRepository] Batch insert for asset_id {} finished", 
+            asset_id);
     } catch (const std::exception& ex) {
-        Logger::Error("[CryptoRepository] Batch insert failed for asset_id {}: {}", asset_id, ex.what());
+        Logger::Error(
+            "[CryptoRepository] Batch insert failed for asset_id {}: {}", 
+            asset_id, ex.what());
     }
 }
 
-std::optional<int> CryptoRepository::GetCryptoAssetId(const std::string& ticker) {
+boost::asio::awaitable<std::optional<int>> CryptoRepository::GetCryptoAssetIdAsync(
+        std::string ticker) {
     try {
-        auto conn_guard = db_.GetConnection();
-
-        pqxx::nontransaction ntxn(conn_guard->Get());
-
-        auto row = ntxn.exec_params1(
+        auto result = co_await db_.Query(
             "SELECT id "
             "FROM crypto_assets "
-            "WHERE ticker = $1", 
-            ticker
-        );
+            "WHERE ticker = $1",
+            {Param(std::move(ticker))});
+        if (result.RowCount() == 0) {
+            co_return std::nullopt;
+        }
 
-        return row[0].as<int>();
+        co_return std::stoi(Text(result, 0, 0));
     } catch (const std::exception&) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 }
 
-std::optional<CryptoAsset> CryptoRepository::GetCryptoAssetByTicker(const std::string& ticker) {
+boost::asio::awaitable<std::optional<CryptoAsset>> CryptoRepository::GetCryptoAssetByTickerAsync(
+        std::string ticker) {
     try {
-        auto conn_guard = db_.GetConnection();
-
-        pqxx::nontransaction ntxn(conn_guard->Get());
-
-        auto row = ntxn.exec_params1(
+        auto result = co_await db_.Query(
             "SELECT id, ticker, name, updated_at "
             "FROM crypto_assets "
-            "WHERE ticker = $1", 
-            ticker
-        );
+            "WHERE ticker = $1",
+            {Param(std::move(ticker))});
+        if (result.RowCount() == 0) {
+            co_return std::nullopt;
+        }
 
         CryptoAsset asset;
-        asset.id = row[0].as<int>();
-        asset.ticker = row[1].as<std::string>();
-        if (!row[2].is_null()) {
-            asset.name = row[2].as<std::string>();
+        asset.id = std::stoi(Text(result, 0, 0));
+        asset.ticker = Text(result, 0, 1);
+        if (!result.IsNull(0, 2)) {
+            asset.name = Text(result, 0, 2);
         }
-        asset.updated_at = TimeUtils::StringToTimestamp(row[3].c_str());
+        asset.updated_at = TimeUtils::StringToTimestamp(Text(result, 0, 3));
 
-        return asset;
+        co_return asset;
     } catch (const std::exception&) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 }
 
-std::vector<CryptoAsset> CryptoRepository::GetAllCryptoAssets() {
-    std::vector<CryptoAsset> result;
+boost::asio::awaitable<std::vector<CryptoAsset>> CryptoRepository::GetAllCryptoAssetsAsync() {
+    std::vector<CryptoAsset> assets;
     try {
-        auto conn_guard = db_.GetConnection();
-
-        pqxx::nontransaction ntxn(conn_guard->Get());
-
-        auto rows = ntxn.exec_params(
+        auto result = co_await db_.Query(
             "SELECT id, ticker, name, updated_at "
             "FROM crypto_assets "
-            "ORDER BY ticker"
-        );
+            "ORDER BY ticker");
 
-        result.reserve(rows.size());
-        for (const auto& row : rows) {
-            CryptoAsset a;
-            a.id = row[0].as<int>();
-            a.ticker = row[1].as<std::string>();
-            if (!row[2].is_null()) {
-                a.name = row[2].as<std::string>();
+        assets.reserve(static_cast<std::size_t>(result.RowCount()));
+        
+        for (int row = 0; row < result.RowCount(); ++row) {
+            CryptoAsset asset;
+            asset.id = std::stoi(Text(result, row, 0));
+            asset.ticker = Text(result, row, 1);
+            if (!result.IsNull(row, 2)) {
+                asset.name = Text(result, row, 2);
             }
-            a.updated_at = TimeUtils::StringToTimestamp(row[3].c_str());
-
-            result.push_back(a);
+            asset.updated_at = TimeUtils::StringToTimestamp(Text(result, row, 3));
+            assets.push_back(std::move(asset));
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[CryptoRepository] Failed to get all crypto assets: {}", ex.what());
+        Logger::Error(
+            "[CryptoRepository] Failed to get all crypto assets: {}", 
+            ex.what());
     }
-    return result;
+    co_return assets;
 }
 
-std::optional<CryptoPriceCandle> CryptoRepository::GetLastCryptoPrice(int asset_id) {
+boost::asio::awaitable<std::optional<CryptoPriceCandle>> CryptoRepository::GetLastCryptoPriceAsync(
+        int asset_id) {
     try {
-        auto conn_guard = db_.GetConnection();
-
-        pqxx::nontransaction ntxn(conn_guard->Get());
-
-        auto rows = ntxn.exec_params(
+        auto result = co_await db_.Query(
             "SELECT timestamp, open, high, low, close, volume "
             "FROM crypto_prices "
             "WHERE asset_id = $1 "
             "ORDER BY timestamp DESC "
             "LIMIT 1",
-            asset_id
-        );
-
-        if (rows.empty()) {
-            return std::nullopt;
+            {Param(asset_id)});
+        if (result.RowCount() == 0) {
+            co_return std::nullopt;
         }
 
-        auto row = rows[0];
-        return CryptoPriceCandle{
-            TimeUtils::StringToTimestamp(row[0].c_str()),
-            row[1].as<double>(),
-            row[2].as<double>(),
-            row[3].as<double>(),
-            row[4].as<double>(),
-            row[5].as<double>()
+        co_return CryptoPriceCandle{
+            TimeUtils::StringToTimestamp(Text(result, 0, 0)),
+            std::stod(Text(result, 0, 1)),
+            std::stod(Text(result, 0, 2)),
+            std::stod(Text(result, 0, 3)),
+            std::stod(Text(result, 0, 4)),
+            std::stod(Text(result, 0, 5))
         };
     } catch (const std::exception& ex) {
-        Logger::Error("[CryptoRepository] Failed to get last crypto price for {}: {}", asset_id, ex.what());
-        return std::nullopt;
+        Logger::Error(
+            "[CryptoRepository] Failed to get last crypto price for {}: {}", 
+            asset_id, ex.what());
+        co_return std::nullopt;
     }
 }
 
-std::vector<CryptoPriceCandle> CryptoRepository::GetCryptoPricesHistory(int asset_id, 
-                                                                            const Timestamp from, 
-                                                                            const Timestamp to) {
-    std::vector<CryptoPriceCandle> result;
+boost::asio::awaitable<std::vector<CryptoPriceCandle>> CryptoRepository::GetCryptoPricesHistoryAsync(
+        int asset_id, 
+        Timestamp from, 
+        Timestamp to) {
+    std::vector<CryptoPriceCandle> prices;
     try {
-        auto conn_guard = db_.GetConnection();
+        auto result = co_await db_.Query(
+            "SELECT timestamp, open, high, low, close, volume "
+            "FROM crypto_prices "
+            "WHERE asset_id = $1 AND timestamp >= $2 AND timestamp <= $3 "
+            "ORDER BY timestamp ASC",
+            {
+                Param(asset_id),
+                Param(TimeUtils::TimestampToString(from)),
+                Param(TimeUtils::TimestampToString(to))
+            });
 
-        pqxx::nontransaction ntxn(conn_guard->Get());
+        prices.reserve(static_cast<std::size_t>(result.RowCount()));
 
-        std::string sql = R"(
-            SELECT timestamp, open, high, low, close, volume 
-            FROM crypto_prices 
-            WHERE asset_id = $1 AND timestamp >= $2 AND timestamp <= $3 
-            ORDER BY timestamp ASC
-        )";
-
-        auto rows = ntxn.exec_params(
-                        sql, 
-                        asset_id, 
-                        TimeUtils::TimestampToString(from), 
-                        TimeUtils::TimestampToString(to)
-                    );
-
-        result.reserve(rows.size());
-        for (const auto& row : rows) {
-            result.push_back({
-                TimeUtils::StringToTimestamp(row[0].c_str()),
-                row[1].as<double>(),
-                row[2].as<double>(),
-                row[3].as<double>(),
-                row[4].as<double>(),
-                row[5].as<double>()
+        for (int row = 0; row < result.RowCount(); ++row) {
+            prices.push_back({
+                TimeUtils::StringToTimestamp(Text(result, row, 0)),
+                std::stod(Text(result, row, 1)),
+                std::stod(Text(result, row, 2)),
+                std::stod(Text(result, row, 3)),
+                std::stod(Text(result, row, 4)),
+                std::stod(Text(result, row, 5))
             });
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[CryptoRepository] Failed to get crypto prices history for {}: {}", asset_id, ex.what());
+        Logger::Error(
+            "[CryptoRepository] Failed to get crypto prices history for {}: {}", 
+            asset_id, ex.what());
     }
-    return result;
+    co_return prices;
 }
 
-void CryptoRepository::UpdateCryptoAssetName(int id, const std::string& new_name) {
+boost::asio::awaitable<void> CryptoRepository::UpdateCryptoAssetNameAsync(
+        int id, 
+        std::string new_name) {
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec_params(
+        co_await db_.Query(
             "UPDATE crypto_assets "
             "SET name = $1 "
-            "WHERE id = $2", 
-            new_name, id
-        );
+            "WHERE id = $2",
+            {Param(std::move(new_name)), Param(id)});
 
-        txn.commit();
-        Logger::Debug("[CryptoRepository] Updated name for crypto_asset_id {}: {}", id, new_name);
+        Logger::Debug(
+            "[CryptoRepository] Updated name for crypto_asset_id {}: {}", 
+            id, new_name);
     } catch (const std::exception& ex) {
-        Logger::Error("[CryptoRepository] Failed to update name crypto_asset {}: {}", id, ex.what());
+        Logger::Error(
+            "[CryptoRepository] Failed to update name crypto_asset {}: {}", 
+            id, ex.what());
     }
 }
 
-void CryptoRepository::DeleteCryptoAsset(int id) {
+boost::asio::awaitable<void> CryptoRepository::DeleteCryptoAssetAsync(int id) {
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec_params(
+        co_await db_.Query(
             "DELETE FROM crypto_assets "
             "WHERE id = $1", 
-            id
-        );
+            {Param(id)});
 
-        txn.commit();
-        Logger::Info("[CryptoRepository] Deleted crypto_asset: {}", id);
+        Logger::Info(
+            "[CryptoRepository] Deleted crypto_asset: {}", 
+            id);
     } catch (const std::exception& ex) {
-        Logger::Error("[CryptoRepository] Failed to delete crypto_asset {}: {}", id, ex.what());
+        Logger::Error(
+            "[CryptoRepository] Failed to delete crypto_asset {}: {}", 
+            id, ex.what());
     }
 }
 
-void CryptoRepository::DeleteOldCryptoPrices(int asset_id, const Timestamp older_than) {
+boost::asio::awaitable<void> CryptoRepository::DeleteOldCryptoPricesAsync(
+        int asset_id, 
+        Timestamp older_than) {
     try {
-        auto conn_guard = db_.GetConnection(); 
-
-        pqxx::work txn(conn_guard->Get());
-
-        txn.exec_params(
+        const auto timestamp = TimeUtils::TimestampToString(older_than);
+        co_await db_.Query(
             "DELETE FROM crypto_prices "
             "WHERE asset_id = $1 AND timestamp < $2",
-            asset_id, TimeUtils::TimestampToString(older_than)
-        );
-        
-        txn.commit();
-        Logger::Info("[CryptoRepository] Deleted crypto prices of asset_id {} older than {}", 
-                        asset_id, TimeUtils::TimestampToString(older_than));
+            {Param(asset_id), Param(timestamp)});
+
+        Logger::Info(
+            "[CryptoRepository] Deleted crypto prices of asset_id {} older than {}", 
+            asset_id, TimeUtils::TimestampToString(older_than));
     } catch (const std::exception& ex) {
-        Logger::Error("[CryptoRepository] Failed to delete crypto prices for {} older than {}: {}", 
-                        asset_id, TimeUtils::TimestampToString(older_than), ex.what());
+        Logger::Error(
+            "[CryptoRepository] Failed to delete crypto prices for {} older than {}: {}", 
+            asset_id, TimeUtils::TimestampToString(older_than), ex.what());
     }
 }

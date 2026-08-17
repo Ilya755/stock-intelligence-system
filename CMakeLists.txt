@@ -31,26 +31,9 @@ FetchContent_Declare(
     GIT_TAG v1.15.2
 )
 
-set(CPR_USE_SYSTEM_CURL ON CACHE BOOL "" FORCE)
-set(CPR_ENABLE_SSL ON CACHE BOOL "" FORCE)
-set(CPR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-    cpr
-    GIT_REPOSITORY https://github.com/libcpr/cpr.git
-    GIT_TAG 1.14.0
-)
-
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-set(PQXX_BUILD_TEST OFF CACHE BOOL "" FORCE)
-set(PQXX_BUILD_DOC OFF CACHE BOOL "" FORCE)
-set(PQXX_INSTALL OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-    libpqxx
-    GIT_REPOSITORY https://github.com/jtv/libpqxx.git
-    GIT_TAG 7.9.0 
-)
 
-FetchContent_MakeAvailable(njson spdlog cpr libpqxx)
+FetchContent_MakeAvailable(njson spdlog)
 
 file(GLOB_RECURSE PROJECT_SOURCES "src/*.cpp")
 file(GLOB_RECURSE PROJECT_HEADERS "src/*.hpp")
@@ -68,10 +51,11 @@ target_include_directories(stock_lib PUBLIC
 target_link_libraries(stock_lib PUBLIC 
     nlohmann_json::nlohmann_json
     spdlog::spdlog
-    cpr::cpr
-    pqxx
+    PostgreSQL::PostgreSQL
     Threads::Threads
     Boost::boost
+    OpenSSL::SSL
+    OpenSSL::Crypto
 )
 
 add_executable(stock_app src/main.cpp)

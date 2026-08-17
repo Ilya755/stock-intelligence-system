@@ -21,7 +21,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(
 )
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(
-    DatabaseConfig, type, name, host, port, username, password
+    DatabaseConfig, type, name, host, port, username, password, pool_size
 )
 
 Config& Config::GetInstance() {
@@ -30,12 +30,14 @@ Config& Config::GetInstance() {
 }
 
 Config::Config() {
-    Logger::Debug("[Config] Loading Config...");
+    Logger::Debug(
+        "[Config] Loading Config...");
     LoadFromFile();
 }
 
 void Config::Reload() {
-    Logger::Info("[Config] Reloading Config...");
+    Logger::Info(
+        "[Config] Reloading Config...");
     LoadFromFile();
 }
 
@@ -45,20 +47,27 @@ void Config::LoadFromFile() {
 
     if (env_path) {
         config_path = env_path;
-        Logger::Debug("[Config] Using config from ENV: {}", config_path.string());
+        Logger::Debug(
+            "[Config] Using config from ENV: {}", config_path.string());
     } else {
         config_path = "/../../configs/app_config.json"; 
-        Logger::Debug("[Config] ENV missing or invalid. Trying local path: {}", config_path.string());
+        Logger::Debug(
+            "[Config] ENV missing or invalid. Trying local path: {}", 
+            config_path.string());
     }
     
     if (!fs::exists(config_path)) {
-        Logger::Error("[Config] Config file not found at: {}", config_path.string());
+        Logger::Error(
+            "[Config] Config file not found at: {}", 
+            config_path.string());
         throw std::runtime_error("Missing config file");
     }
     
     std::ifstream file(config_path);
     if (!file.is_open()) {
-        Logger::Error("[Config] Failed to open file {}", config_path.string());
+        Logger::Error(
+            "[Config] Failed to open file {}", 
+            config_path.string());
         throw std::runtime_error("File openning error");
     }
 
@@ -66,20 +75,23 @@ void Config::LoadFromFile() {
         json j = json::parse(file);
 
         if (!j.contains("server")) {
-            Logger::Critical("[Config] Missing critical 'server' section");
+            Logger::Critical(
+                "[Config] Missing critical 'server' section");
             throw std::runtime_error("Config missing 'server' section");
         }
         ServerConfig temp_server = j.at("server").get<ServerConfig>();
 
         if (!j.contains("database")) {
-            Logger::Critical("[Config] Missing critical 'database' section");
+            Logger::Critical(
+                "[Config] Missing critical 'database' section");
             throw std::runtime_error("Config missing 'database' section");
         }
         DatabaseConfig temp_db = j.at("database").get<DatabaseConfig>();
 
         std::map<std::string, ApiConfig> temp_providers;
         if (!j.contains("api_providers")) {
-            Logger::Warn("[Config] Section 'api_providers' is missing");
+            Logger::Warn(
+                "[Config] Section 'api_providers' is missing");
         } else {
             temp_providers = j.at("api_providers").get<std::map<std::string, ApiConfig>>();
             for (auto& [key, val] : providers_) {
@@ -93,11 +105,15 @@ void Config::LoadFromFile() {
                 temp_logger_path = j["logger"]["logs_path"].get<std::string>();
             } else {
                 logger_path_ = "logs"; 
-                Logger::Warn("[Config] 'logger.logs_path' missing, using default path: {}", logger_path_);
+                Logger::Warn(
+                    "[Config] 'logger.logs_path' missing, using default path: {}", 
+                    logger_path_);
             }
         } else {
             temp_logger_path = "logs";
-            Logger::Info("[Config] 'logger' section missing, using default path: {}", logger_path_);
+            Logger::Info(
+                "[Config] 'logger' section missing, using default path: {}", 
+                logger_path_);
         }
 
         {
@@ -108,9 +124,13 @@ void Config::LoadFromFile() {
             logger_path_ = std::move(temp_logger_path);
         }
 
-        Logger::Info("[Config] Config loaded successfully. Found {} providers.", providers_.size());
+        Logger::Info(
+            "[Config] Config loaded successfully. Found {} providers.",
+            providers_.size());
     } catch (const json::exception& ex) {
-        Logger::Error("[Config] JSON parsing failed: {}. Keeping old configuration.", ex.what());
+        Logger::Error(
+            "[Config] JSON parsing failed: {}. Keeping old configuration.", 
+            ex.what());
         throw; 
     }
 }
@@ -130,7 +150,9 @@ ApiConfig Config::GetProvider(const std::string& key) const {
     try {
         return providers_.at(key);
     } catch (const std::out_of_range&) {
-        Logger::Critical("[Config] Requested unknown provider config: '{}'", key);
+        Logger::Critical(
+            "[Config] Requested unknown provider config: '{}'", 
+            key);
         throw std::runtime_error("Provider config not found: " + key);
     }
 }

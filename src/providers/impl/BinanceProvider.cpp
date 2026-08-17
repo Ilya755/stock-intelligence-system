@@ -15,7 +15,9 @@ BinanceProvider::BinanceProvider(std::shared_ptr<IHttpClient> client,
             if (crypto_cap.has_value()) {
                 crypto_caps_.insert(crypto_cap.value());
             } else {
-                Logger::Warn("[Binance] Unknown capability '{}' in config'", s);
+                Logger::Warn(
+                    "[Binance] Unknown capability '{}' in config'", 
+                    s);
             }
         }
     }
@@ -28,41 +30,43 @@ bool BinanceProvider::HasCapability(const CryptoCapability cap) const {
     return crypto_caps_.contains(cap);
 }
 
-std::optional<double> BinanceProvider::GetCryptoPrice(const std::string& ticker) {
+boost::asio::awaitable<std::optional<double>> BinanceProvider::GetCryptoPrice(
+        const std::string& ticker) {
     if (!HasCapability(CryptoCapability::RealtimePrice)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformGet("/ticker/price", {{"symbol", ticker}});
+    auto json_opt = co_await PerformGetAsync("/ticker/price", {{"symbol", ticker}});
     
     if (!json_opt.has_value()) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     std::string price_str = (json_opt.value()).value("price", "");
     double price = ParseDoubleSafe(price_str);
     
     if (price == 0.0) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
-    return price;
+    co_return price;
 }
 
-std::optional<CryptoAsset> BinanceProvider::GetCryptoAssetInfo(const std::string& ticker) {
+boost::asio::awaitable<std::optional<CryptoAsset>> BinanceProvider::GetCryptoAssetInfo(
+        const std::string& ticker) {
     if (!HasCapability(CryptoCapability::Metadata)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformGet("/exchangeInfo", {{"symbol", ticker}});
+    auto json_opt = co_await PerformGetAsync("/exchangeInfo", {{"symbol", ticker}});
     
     if (!json_opt.has_value() || !json_opt->contains("symbols")) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     try {
         const auto& symbols = (json_opt.value())["symbols"];
         if (symbols.empty()) {
-            return std::nullopt;
+            co_return std::nullopt;
         }
 
         const auto& info = symbols[0];
@@ -72,22 +76,24 @@ std::optional<CryptoAsset> BinanceProvider::GetCryptoAssetInfo(const std::string
         asset.ticker = info.value("symbol", "");
         asset.name = info.value("baseAsset", ""); 
 
-        return asset;
+        co_return asset;
     } catch (const std::exception& ex) {
-        Logger::Error("[Binance] Parse AssetInfo error for {}: {}", ticker, ex.what());
-        return std::nullopt;
+        Logger::Error(
+            "[Binance] Parse AssetInfo error for {}: {}", 
+            ticker, ex.what());
+        co_return std::nullopt;
     }
 }
 
-std::vector<CryptoAsset> BinanceProvider::GetCryptoTopList(const int limit) {
+boost::asio::awaitable<std::vector<CryptoAsset>> BinanceProvider::GetCryptoTopList(const int limit) {
     if (!HasCapability(CryptoCapability::TopList)) {
-        return {};
+        co_return std::vector<CryptoAsset>{};
     }
 
-    auto json_opt = PerformGet("/ticker/24hr");
+    auto json_opt = co_await PerformGetAsync("/ticker/24hr");
     
     if (!json_opt.has_value() || !json_opt->is_array()) {
-        return {};
+        co_return std::vector<CryptoAsset>{};
     }
 
     std::vector<std::pair<double, CryptoAsset>> sorted_assets;
@@ -112,7 +118,9 @@ std::vector<CryptoAsset> BinanceProvider::GetCryptoTopList(const int limit) {
             
             sorted_assets.push_back({volume, asset});
         } catch (const std::exception& ex) {
-            Logger::Warn("[Binance] Failed to parse item in TopList: {}", ex.what());
+            Logger::Warn(
+                "[Binance] Failed to parse item in TopList: {}",
+                ex.what());
             continue; 
         }
     }
@@ -127,23 +135,25 @@ std::vector<CryptoAsset> BinanceProvider::GetCryptoTopList(const int limit) {
         results.push_back(sorted_assets[i].second);
     }
     
-    return results;
+    co_return results;
 }
 
-std::optional<OrderBook> BinanceProvider::GetOrderBook(const std::string& ticker, const int depth) {
+boost::asio::awaitable<std::optional<OrderBook>> BinanceProvider::GetOrderBook(
+        const std::string& ticker, 
+        const int depth) {
     if (!HasCapability(CryptoCapability::OrderBook)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     int limit = (depth <= 5) ? 5 : (depth <= 10) ? 10 : (depth <= 20) ? 20 : 50;
 
-    auto json_opt = PerformGet("/depth", {
+    auto json_opt = co_await PerformGetAsync("/depth", {
                                 {"symbol", ticker}, 
                                 {"limit", std::to_string(limit)}
                             });
 
     if (!json_opt.has_value()) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     try {
@@ -176,31 +186,37 @@ std::optional<OrderBook> BinanceProvider::GetOrderBook(const std::string& ticker
             book.asks = parse_entries((json_opt.value())["asks"]);
         }
 
-        return book;
+        co_return book;
     } catch (const std::exception& ex) {
-        Logger::Error("[Binance] OrderBook parse error for {}: {}", ticker, ex.what());
-        return std::nullopt;
+        Logger::Error(
+            "[Binance] OrderBook parse error for {}: {}", 
+            ticker, ex.what());
+        co_return std::nullopt;
     }
 }
 
-std::vector<CryptoPriceCandle> BinanceProvider::GetCryptoHistory(const std::string& ticker, 
-                                                                    const Timestamp from, const Timestamp to, 
-                                                                    const TimeFrame interval) {
+boost::asio::awaitable<std::vector<CryptoPriceCandle>> BinanceProvider::GetCryptoHistory(
+        const std::string& ticker, 
+        const Timestamp from, 
+        const Timestamp to, 
+        const TimeFrame interval) {
     if (!HasCapability(CryptoCapability::History)) {
-        return {};
+        co_return std::vector<CryptoPriceCandle>{};
     }
 
     std::string interval_str = ConvertInterval(interval);
 
     if (interval_str.empty()) {
-        Logger::Warn("[Binance] Interval not supported: {}", (int)interval);
-        return {};
+        Logger::Warn(
+            "[Binance] Interval not supported: {}", 
+            (int)interval);
+        co_return std::vector<CryptoPriceCandle>{};
     }
 
     long long start_ms = std::chrono::duration_cast<std::chrono::milliseconds>(from.time_since_epoch()).count();
     long long end_ms = std::chrono::duration_cast<std::chrono::milliseconds>(to.time_since_epoch()).count();
 
-    auto json_opt = PerformGet("/klines", {
+    auto json_opt = co_await PerformGetAsync("/klines", {
                                 {"symbol", ticker},
                                 {"interval", interval_str},
                                 {"startTime", std::to_string(start_ms)},
@@ -209,7 +225,7 @@ std::vector<CryptoPriceCandle> BinanceProvider::GetCryptoHistory(const std::stri
                             });
 
     if (!json_opt.has_value() || !json_opt->is_array()) {
-        return {};
+        co_return std::vector<CryptoPriceCandle>{};
     }
 
     std::vector<CryptoPriceCandle> results;
@@ -235,20 +251,23 @@ std::vector<CryptoPriceCandle> BinanceProvider::GetCryptoHistory(const std::stri
             results.push_back(c);
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[Binance] History parse error for {}: {}", ticker, ex.what());
+        Logger::Error(
+            "[Binance] History parse error for {}: {}", 
+            ticker, ex.what());
     }
-    return results;
+    co_return results;
 }
 
-std::vector<CryptoAsset> BinanceProvider::SearchAsset(const std::string& query) {
-    return {}; // ToDo: expand the enum to ensure strict compliance with the requested resource
+boost::asio::awaitable<std::vector<CryptoAsset>> BinanceProvider::SearchAsset(const std::string& query) {
+    co_return std::vector<CryptoAsset>{}; // ToDo: expand the enum to ensure strict compliance with the requested resource
 }
 
-std::optional<GlobalCryptoMetrics> BinanceProvider::GetGlobalMetrics() {
+boost::asio::awaitable<std::optional<GlobalCryptoMetrics>> BinanceProvider::GetGlobalMetrics() {
     if (HasCapability(CryptoCapability::GlobalMetrics)) {
-        Logger::Warn("[Binance] GlobalMetrics not supported directly");
+        Logger::Warn(
+            "[Binance] GlobalMetrics not supported directly");
     }
-    return std::nullopt;
+    co_return std::nullopt;
 }
 
 std::string BinanceProvider::ConvertInterval(const TimeFrame tf) {

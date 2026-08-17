@@ -25,8 +25,9 @@ protected:
     std::string base_url_;
     std::unique_ptr<RateLimiter> rate_limiter_;
 
-    std::optional<nlohmann::json> PerformGet(const std::string& endpoint, 
-                                                std::map<std::string, std::string> params = {});
+    boost::asio::awaitable<std::optional<json>> PerformGetAsync(
+        const std::string& endpoint, 
+        std::map<std::string, std::string> params = {});
 
     double ParseDoubleSafe(const std::string& str);
 };

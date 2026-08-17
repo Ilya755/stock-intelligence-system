@@ -2,9 +2,13 @@
 
 #include "../../common/Logger.hpp"
 
-AlphaVantageProvider::AlphaVantageProvider(std::shared_ptr<IHttpClient> client, const std::string& name,
-                                            const std::string& api_key, const std::string& base_url,
-                                            const Limits& limits, const std::vector<std::string>& config_caps) 
+AlphaVantageProvider::AlphaVantageProvider(
+        std::shared_ptr<IHttpClient> client, 
+        const std::string& name,
+        const std::string& api_key,
+        const std::string& base_url,
+        const Limits& limits, 
+        const std::vector<std::string>& config_caps) 
     : BaseProvider(client, api_key, base_url, limits)
     , name_(name) {
         for (const auto& s : config_caps) {
@@ -16,7 +20,9 @@ AlphaVantageProvider::AlphaVantageProvider(std::shared_ptr<IHttpClient> client, 
             } else if (crypto_cap.has_value()) {
                 crypto_caps_.insert(crypto_cap.value());
             } else {
-                Logger::Warn("[AlphaVantage] Unknown capability '{}' in config", s);
+                Logger::Warn(
+                    "[AlphaVantage] Unknown capability '{}' in config", 
+                    s);
             }
         }
     }
@@ -29,64 +35,69 @@ bool AlphaVantageProvider::HasCapability(const ProviderCapability cap) const {
     return stock_caps_.contains(cap);
 }
 
-int AlphaVantageProvider::GetRemainingRequests() const { return -1; } // ToDo: do correct realization
+boost::asio::awaitable<int> AlphaVantageProvider::GetRemainingRequests() const { co_return -1; } // ToDo: do correct realization
 
-std::optional<double> AlphaVantageProvider::GetStockPrice(const std::string& ticker) {
+boost::asio::awaitable<std::optional<double>> AlphaVantageProvider::GetStockPrice(
+        const std::string& ticker) {
     if (!HasCapability(ProviderCapability::PriceRealtime) && 
             !HasCapability(ProviderCapability::PriceIntraday)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformAVRequest({
+    auto json_opt = co_await PerformAVRequestAsync({
                             {"function", "GLOBAL_QUOTE"},
                             {"symbol", ticker}
                         });
 
     if (!json_opt.has_value() || !json_opt->contains("Global Quote")) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     try {
         const auto& q = (json_opt.value())["Global Quote"];
         std::string price_str = q.value("05. price", "");
         if (price_str.empty()) {
-            return std::nullopt;
+            co_return std::nullopt;
         }
-        return std::stod(price_str);
+
+        co_return std::stod(price_str);
     } catch (const std::exception& ex) {
-        Logger::Error("[AlphaVantage] Quote parse error for {}: {}", ticker, ex.what());
-        return std::nullopt;
+        Logger::Error(
+            "[AlphaVantage] Quote parse error for {}: {}", 
+            ticker, ex.what());
+        co_return std::nullopt;
     }
 }
 
-std::vector<StockPriceCandle> AlphaVantageProvider::GetStockHistory(const std::string& ticker, 
-                                                                        const Timestamp from, 
-                                                                        const Timestamp to, 
-                                                                        const TimeFrame interval) {
+boost::asio::awaitable<std::vector<StockPriceCandle>> AlphaVantageProvider::GetStockHistory(
+        const std::string& ticker, 
+        const Timestamp from, 
+        const Timestamp to, 
+        const TimeFrame interval) {
     std::string function_name;
     std::string time_key;
 
     if (interval == TimeFrame::Daily) {
         if (!HasCapability(ProviderCapability::PriceDaily)) {
-            return {};
+            co_return std::vector<StockPriceCandle>{};
         }
         function_name = "TIME_SERIES_DAILY";
         time_key = "Daily Time Series";
     } else if (interval == TimeFrame::Weekly) {
         if (!HasCapability(ProviderCapability::PriceHistoryDeep)) {
-            return {};
+            co_return std::vector<StockPriceCandle>{};
         }
         function_name = "TIME_SERIES_WEEKLY";
         time_key = "Weekly Time Series";
     } else if (interval == TimeFrame::Monthly) {
         if (!HasCapability(ProviderCapability::PriceHistoryDeep)) {
-            return {};
+            co_return std::vector<StockPriceCandle>{};
         }
         function_name = "TIME_SERIES_MONTHLY";
         time_key = "Monthly Time Series";
     } else {
         if (!HasCapability(ProviderCapability::PriceIntraday)) {
-            return {};
+            co_return std::vector<StockPriceCandle>{};
         }
         function_name = "TIME_SERIES_INTRADAY";
         time_key = "Time Series (" + ConvertInterval(interval) + ")"; 
@@ -100,15 +111,17 @@ std::vector<StockPriceCandle> AlphaVantageProvider::GetStockHistory(const std::s
         params["interval"] = ConvertInterval(interval);
     }
 
-    auto json_opt = PerformAVRequest(params);
+    auto json_opt = co_await PerformAVRequestAsync(params);
 
     if (!json_opt.has_value()) {
-        return {};
+        co_return std::vector<StockPriceCandle>{};
     }
 
     if (!json_opt->contains(time_key)) {
-        Logger::Warn("[AlphaVantage] History response missing key '{}' for {}.", time_key, ticker);
-        return {};
+        Logger::Warn(
+            "[AlphaVantage] History response missing key '{}' for {}.", 
+            time_key, ticker);
+        co_return std::vector<StockPriceCandle>{};
     }
 
     std::vector<StockPriceCandle> results;
@@ -116,7 +129,7 @@ std::vector<StockPriceCandle> AlphaVantageProvider::GetStockHistory(const std::s
         const auto& series = (json_opt.value())[time_key];
 
         if (!series.is_array()){
-            return {};
+            co_return std::vector<StockPriceCandle>{};
         }
         
         results.reserve(series.size()); 
@@ -140,25 +153,28 @@ std::vector<StockPriceCandle> AlphaVantageProvider::GetStockHistory(const std::s
             results.push_back(c);
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[AlphaVantage] History parse error for {}: {}", ticker, ex.what());
+        Logger::Error(
+            "[AlphaVantage] History parse error for {}: {}", 
+            ticker, ex.what());
     }
 
     std::sort(results.begin(), results.end(), [](const auto& a, const auto& b) {
         return a.timestamp < b.timestamp;
     });
 
-    return results;
+    co_return results;
 }
 
-std::optional<CompanyFullInfo> AlphaVantageProvider::GetCompanyProfile(const std::string& ticker) {
+boost::asio::awaitable<std::optional<CompanyFullInfo>> AlphaVantageProvider::GetCompanyProfile(
+        const std::string& ticker) {
     if (!HasCapability(ProviderCapability::CompanyProfile)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformAVRequest({{"function", "OVERVIEW"}, {"symbol", ticker}});
+    auto json_opt = co_await PerformAVRequestAsync({{"function", "OVERVIEW"}, {"symbol", ticker}});
 
     if (!json_opt.has_value() || json_opt->empty()) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     try {
@@ -175,22 +191,25 @@ std::optional<CompanyFullInfo> AlphaVantageProvider::GetCompanyProfile(const std
         info.industry = j.value("Industry", "");
         info.updated_at = std::chrono::system_clock::now();
 
-        return info;
+        co_return info;
     } catch (const std::exception& ex) {
-        Logger::Error("[AlphaVantage] Profile parse error for {}: {}", ticker, ex.what());
-        return std::nullopt;
+        Logger::Error(
+            "[AlphaVantage] Profile parse error for {}: {}", 
+            ticker, ex.what());
+        co_return std::nullopt;
     }
 }
 
-std::vector<CompanyFinancialReport> AlphaVantageProvider::GetFinancialReports(const std::string& ticker) {
+boost::asio::awaitable<std::vector<CompanyFinancialReport>> AlphaVantageProvider::GetFinancialReports(
+        const std::string& ticker) {
     if (!HasCapability(ProviderCapability::FinancialsDeep)) {
-        return {};
+        co_return std::vector<CompanyFinancialReport>{};
     }
 
-    auto json_opt = PerformAVRequest({{"function", "INCOME_STATEMENT"}, {"symbol", ticker}});
+    auto json_opt = co_await PerformAVRequestAsync({{"function", "INCOME_STATEMENT"}, {"symbol", ticker}});
     
     if (!json_opt.has_value() || !json_opt->contains("annualReports")) {
-        return {};
+        co_return std::vector<CompanyFinancialReport>{};
     }
 
     std::vector<CompanyFinancialReport> reports;
@@ -198,7 +217,7 @@ std::vector<CompanyFinancialReport> AlphaVantageProvider::GetFinancialReports(co
         const auto& data = (json_opt.value())["annualReports"];
 
         if (!data.is_array()) {
-            return {};
+            co_return std::vector<CompanyFinancialReport>{};
         }
 
         reports.reserve(data.size());
@@ -216,14 +235,17 @@ std::vector<CompanyFinancialReport> AlphaVantageProvider::GetFinancialReports(co
             reports.push_back(r);
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[AlphaVantage] Financials parse error for {}: {}", ticker, ex.what());
+        Logger::Error(
+            "[AlphaVantage] Financials parse error for {}: {}", 
+            ticker, ex.what());
     }
-    return reports;
+    co_return reports;
 }
 
-std::vector<EconomicIndicator> AlphaVantageProvider::GetMacroIndicator(const MacroIndicatorType type) {
+boost::asio::awaitable<std::vector<EconomicIndicator>> AlphaVantageProvider::GetMacroIndicator(
+        const MacroIndicatorType type) {
     if (!HasCapability(ProviderCapability::MacroEconomics)) {
-        return {};
+        co_return std::vector<EconomicIndicator>{};
     }
 
     std::string function;
@@ -241,13 +263,13 @@ std::vector<EconomicIndicator> AlphaVantageProvider::GetMacroIndicator(const Mac
             function = "FEDERAL_FUNDS_RATE"; 
             break;
         default: 
-            return {};
+            co_return std::vector<EconomicIndicator>{};
     }
 
-    auto json_opt = PerformAVRequest({{"function", function}});
+    auto json_opt = co_await PerformAVRequestAsync({{"function", function}});
 
     if (!json_opt.has_value() || !json_opt->contains("data")) {
-        return {};
+        co_return std::vector<EconomicIndicator>{};
     }
 
     std::vector<EconomicIndicator> results;
@@ -255,7 +277,7 @@ std::vector<EconomicIndicator> AlphaVantageProvider::GetMacroIndicator(const Mac
         const auto& data = (json_opt.value())["data"];
         
         if (!data.is_array()) {
-            return {};
+            co_return std::vector<EconomicIndicator>{};
         }
 
         results.reserve(data.size());
@@ -268,16 +290,19 @@ std::vector<EconomicIndicator> AlphaVantageProvider::GetMacroIndicator(const Mac
             results.push_back(ind);
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[AlphaVantage] Macro parse error: {}", ex.what());
+        Logger::Error(
+            "[AlphaVantage] Macro parse error: {}", 
+            ex.what());
     }
-    return results;
+    co_return results;
 }
 
-std::map<std::string, double> AlphaVantageProvider::GetTechnicalIndicator(const std::string& ticker, 
-                                                                            const TechIndicatorType type, 
-                                                                            const TimeFrame interval) {
+boost::asio::awaitable<std::map<std::string, double>> AlphaVantageProvider::GetTechnicalIndicator(
+        const std::string& ticker, 
+        const TechIndicatorType type, 
+        const TimeFrame interval) {
     if (!HasCapability(ProviderCapability::TechIndicators)) {
-        return {};
+        co_return std::map<std::string, double>{};
     }
 
     std::string func;
@@ -297,12 +322,12 @@ std::map<std::string, double> AlphaVantageProvider::GetTechnicalIndicator(const 
             key = "Technical Analysis: EMA"; 
             break;
         default: 
-            return {}; 
+            co_return std::map<std::string, double>{}; 
     }
 
     std::string interval_str = ConvertInterval(interval);
 
-    auto json_opt = PerformAVRequest({
+    auto json_opt = co_await PerformAVRequestAsync({
                             {"function", func},
                             {"symbol", ticker},
                             {"interval", interval_str},
@@ -311,13 +336,13 @@ std::map<std::string, double> AlphaVantageProvider::GetTechnicalIndicator(const 
                         });
 
     if (!json_opt.has_value() || !json_opt->contains(key)) {
-        return {};
+        co_return std::map<std::string, double>{};
     }
 
     try {
         const auto& series = (json_opt.value())[key];
         if (series.empty()) {
-            return {};
+            co_return std::map<std::string, double>{};
         }
         
         const auto& val_obj = series.begin().value();
@@ -326,18 +351,21 @@ std::map<std::string, double> AlphaVantageProvider::GetTechnicalIndicator(const 
         for (auto it = val_obj.begin(); it != val_obj.end(); ++it) {
             result[it.key()] = ParseDoubleSafe(it.value().get<std::string>());
         }
-        return result;
+        co_return result;
     } catch (const std::exception& ex) {
-        Logger::Error("[AlphaVantage] Tech Indicator parse error: {}", ex.what());
-        return {}; 
+        Logger::Error(
+            "[AlphaVantage] Tech Indicator parse error: {}", 
+            ex.what());
+        co_return std::map<std::string, double>{}; 
     }
 }
 
-std::vector<TickerSearchResult> AlphaVantageProvider::SearchStockTicker(const std::string& ticker) {
-    auto json_opt = PerformAVRequest({{"function", "SYMBOL_SEARCH"}, {"keywords", ticker}});
+boost::asio::awaitable<std::vector<TickerSearchResult>> AlphaVantageProvider::SearchStockTicker(
+        const std::string& ticker) {
+    auto json_opt = co_await PerformAVRequestAsync({{"function", "SYMBOL_SEARCH"}, {"keywords", ticker}});
     
     if (!json_opt.has_value() || !json_opt->contains("bestMatches")) {
-        return {};
+        co_return std::vector<TickerSearchResult>{};
     }
 
     std::vector<TickerSearchResult> results;
@@ -345,7 +373,7 @@ std::vector<TickerSearchResult> AlphaVantageProvider::SearchStockTicker(const st
         const auto& matches = (json_opt.value())["bestMatches"];
         
         if (!matches.is_array()) {
-            return {};
+            co_return std::vector<TickerSearchResult>{};
         }
 
         results.reserve(matches.size());
@@ -364,28 +392,31 @@ std::vector<TickerSearchResult> AlphaVantageProvider::SearchStockTicker(const st
             results.push_back(res);
         }
     } catch (const std::exception& ex) {
-        Logger::Error("[AlphaVantage] Search parse error: {}", ex.what());
+        Logger::Error(
+            "[AlphaVantage] Search parse error: {}",
+            ex.what());
     }
-    return results;
+    co_return results;
 }
 
 bool AlphaVantageProvider::HasCapability(const CryptoCapability cap) const {
     return crypto_caps_.contains(cap);
 }
 
-std::optional<double> AlphaVantageProvider::GetCryptoPrice(const std::string& ticker) {
+boost::asio::awaitable<std::optional<double>> AlphaVantageProvider::GetCryptoPrice(
+        const std::string& ticker) {
     if (!HasCapability(CryptoCapability::RealtimePrice)) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
-    auto json_opt = PerformAVRequest({
+    auto json_opt = co_await PerformAVRequestAsync({
                             {"function", "CURRENCY_EXCHANGE_RATE"},
                             {"from_currency", ticker},
                             {"to_currency", "USD"}
                         });
 
     if (!json_opt.has_value() || !json_opt->contains("Realtime Currency Exchange Rate")) {
-        return std::nullopt;
+        co_return std::nullopt;
     }
 
     try {
@@ -393,28 +424,33 @@ std::optional<double> AlphaVantageProvider::GetCryptoPrice(const std::string& ti
 
         std::string price_str = q.value("5. Exchange Rate", "");
         if (price_str.empty()) {
-            return std::nullopt;
+            co_return std::nullopt;
         }
 
-        return std::stod(price_str);
+        co_return std::stod(price_str);
     } catch (const std::exception& ex) {
-        Logger::Error("[AlphaVantage] Crypto Price parse error for {}: {}", ticker, ex.what());
-        return std::nullopt;
+        Logger::Error(
+            "[AlphaVantage] Crypto Price parse error for {}: {}", 
+            ticker, ex.what());
+        co_return std::nullopt;
     }
 }
 
-std::vector<CryptoPriceCandle> AlphaVantageProvider::GetCryptoHistory(const std::string& ticker, const Timestamp from, 
-                                                                        const Timestamp to, const TimeFrame interval) {
+boost::asio::awaitable<std::vector<CryptoPriceCandle>> AlphaVantageProvider::GetCryptoHistory(
+        const std::string& ticker, 
+        const Timestamp from, 
+        const Timestamp to, 
+        const TimeFrame interval) {
     if (!HasCapability(CryptoCapability::History)) {
-        return {};
+        co_return std::vector<CryptoPriceCandle>{};
     }
 
     std::string func = (interval == TimeFrame::Daily) ? "DIGITAL_CURRENCY_DAILY" : "DIGITAL_CURRENCY_WEEKLY";
     if (interval != TimeFrame::Daily && interval != TimeFrame::Weekly) {
-        return {};
+        co_return std::vector<CryptoPriceCandle>{};
     }
 
-    auto json_opt = PerformAVRequest({
+    auto json_opt = co_await PerformAVRequestAsync({
                             {"function", func},
                             {"symbol", ticker},
                             {"market", "USD"}
@@ -425,7 +461,7 @@ std::vector<CryptoPriceCandle> AlphaVantageProvider::GetCryptoHistory(const std:
                                         "Time Series (Digital Currency Weekly)";
     
     if (!json_opt.has_value() || !json_opt->contains(key)) {
-        return {};
+        co_return std::vector<CryptoPriceCandle>{};
     }
 
     std::vector<CryptoPriceCandle> results;
@@ -433,7 +469,7 @@ std::vector<CryptoPriceCandle> AlphaVantageProvider::GetCryptoHistory(const std:
         const auto& series = (json_opt.value())[key];
 
         if (!series.is_array()) {
-            return {};
+            co_return std::vector<CryptoPriceCandle>{};
         }
 
         results.reserve(series.size());
@@ -459,114 +495,150 @@ std::vector<CryptoPriceCandle> AlphaVantageProvider::GetCryptoHistory(const std:
             return a.timestamp < b.timestamp;
         });
     } catch (const std::exception& ex) {
-        Logger::Error("[AlphaVantage] Crypto History parse error: {}", ex.what());
+        Logger::Error(
+            "[AlphaVantage] Crypto History parse error: {}", 
+            ex.what());
     }
-    return results;
+    co_return results;
 }
 
-std::vector<StockDividends> AlphaVantageProvider::GetDividends(const std::string&, const Date, const Date) { 
+boost::asio::awaitable<std::vector<StockDividends>> AlphaVantageProvider::GetDividends(
+        const std::string&, 
+        const Date, 
+        const Date) { 
     if (HasCapability(ProviderCapability::Dividends)) {
-        Logger::Warn("[AlphaVantage] Dividends not implemented.");
+        Logger::Warn(
+            "[AlphaVantage] Dividends not implemented.");
     }
-    return {}; 
+    co_return std::vector<StockDividends>{}; 
 }
 
-std::vector<StockSplit> AlphaVantageProvider::GetStockSplits(const std::string&, const Date, const Date) { 
+boost::asio::awaitable<std::vector<StockSplit>> AlphaVantageProvider::GetStockSplits(
+        const std::string&, 
+        const Date, 
+        const Date) { 
     if (HasCapability(ProviderCapability::StockSplits)) {
-        Logger::Warn("[AlphaVantage] Splits not implemented.");
+        Logger::Warn(
+            "[AlphaVantage] Splits not implemented.");
     }
-    return {}; 
+    co_return std::vector<StockSplit>{}; 
 }
 
-std::vector<InsiderTransaction> AlphaVantageProvider::GetInsiderTransactions(const std::string&, const int) { 
+boost::asio::awaitable<std::vector<InsiderTransaction>> AlphaVantageProvider::GetInsiderTransactions(
+        const std::string&, 
+        const int) { 
     if (HasCapability(ProviderCapability::Insiders)) {
-        Logger::Warn("[AlphaVantage] Insiders not implemented.");
+        Logger::Warn(
+            "[AlphaVantage] Insiders not implemented.");
     }
-    return {}; 
+    co_return std::vector<InsiderTransaction>{}; 
 }
 
-std::vector<MarketNews> AlphaVantageProvider::GetCompanyNews(const std::string&, const int) { 
+boost::asio::awaitable<std::vector<MarketNews>> AlphaVantageProvider::GetCompanyNews(
+        const std::string&, 
+        const int) { 
     if (HasCapability(ProviderCapability::News)) {
-        Logger::Warn("[AlphaVantage] News not implemented.");
+        Logger::Warn(
+            "[AlphaVantage] News not implemented.");
     }
-    return {}; 
+    co_return std::vector<MarketNews>{}; 
 }
 
-std::vector<MarketNews> AlphaVantageProvider::GetMarketNews(const std::string&, const int) { 
+boost::asio::awaitable<std::vector<MarketNews>> AlphaVantageProvider::GetMarketNews(
+        const std::string&, 
+        const int) { 
     if (HasCapability(ProviderCapability::News)) {
-        Logger::Warn("[AlphaVantage] News not implemented.");
+        Logger::Warn(
+            "[AlphaVantage] News not implemented.");
     }
-    return {}; 
+    co_return std::vector<MarketNews>{}; 
 }
 
-std::vector<CalendarEvent> AlphaVantageProvider::GetEarningsCalendar(const Date, const Date) { 
+boost::asio::awaitable<std::vector<CalendarEvent>> AlphaVantageProvider::GetEarningsCalendar(
+        const Date, 
+        const Date) { 
     if (HasCapability(ProviderCapability::Earnings)) {
-        Logger::Warn("[AlphaVantage] Earnings not implemented.");
+        Logger::Warn(
+            "[AlphaVantage] Earnings not implemented.");
     }
-    return {}; 
+    co_return std::vector<CalendarEvent>{}; 
 }
 
-std::optional<AnalystRating> AlphaVantageProvider::GetAnalystRatings(const std::string&) { 
+boost::asio::awaitable<std::optional<AnalystRating>> AlphaVantageProvider::GetAnalystRatings(
+        const std::string&) { 
     if (HasCapability(ProviderCapability::AnalystRatings)) {
-        Logger::Warn("[AlphaVantage] Ratings not implemented.");
+        Logger::Warn(
+            "[AlphaVantage] Ratings not implemented.");
     }
-    return std::nullopt; 
+    co_return std::nullopt; 
 }
 
-std::optional<CryptoAsset> AlphaVantageProvider::GetCryptoAssetInfo(const std::string&) { 
+boost::asio::awaitable<std::optional<CryptoAsset>> AlphaVantageProvider::GetCryptoAssetInfo(
+        const std::string&) { 
     if (HasCapability(CryptoCapability::Metadata)) {
-        Logger::Warn("[AlphaVantage] Crypto Metadata not implemented.");
+        Logger::Warn(
+            "[AlphaVantage] Crypto Metadata not implemented.");
     }
-    return std::nullopt; 
+    co_return std::nullopt; 
 }
 
-std::vector<CryptoAsset> AlphaVantageProvider::GetCryptoTopList(int) { 
+boost::asio::awaitable<std::vector<CryptoAsset>> AlphaVantageProvider::GetCryptoTopList(int) { 
     if (HasCapability(CryptoCapability::TopList)) {
-        Logger::Warn("[AlphaVantage] Crypto TopList not implemented.");
+        Logger::Warn(
+            "[AlphaVantage] Crypto TopList not implemented.");
     }
-    return {}; 
+    co_return std::vector<CryptoAsset>{}; 
 }
 
-std::optional<GlobalCryptoMetrics> AlphaVantageProvider::GetGlobalMetrics() { 
+boost::asio::awaitable<std::optional<GlobalCryptoMetrics>> AlphaVantageProvider::GetGlobalMetrics() { 
     if (HasCapability(CryptoCapability::GlobalMetrics)) {
-        Logger::Warn("[AlphaVantage] Crypto GlobalMetrics not implemented.");
+        Logger::Warn(
+            "[AlphaVantage] Crypto GlobalMetrics not implemented.");
     }
-    return std::nullopt; 
+    co_return std::nullopt; 
 }
 
-std::optional<OrderBook> AlphaVantageProvider::GetOrderBook(const std::string&, const int) { 
+boost::asio::awaitable<std::optional<OrderBook>> AlphaVantageProvider::GetOrderBook(
+        const std::string&, 
+        const int) { 
     if (HasCapability(CryptoCapability::OrderBook)) {
-        Logger::Warn("[AlphaVantage] Crypto OrderBook not implemented.");
+        Logger::Warn(
+            "[AlphaVantage] Crypto OrderBook not implemented.");
     }
-    return std::nullopt; 
+    co_return std::nullopt; 
 }
 
-std::vector<CryptoAsset> AlphaVantageProvider::SearchAsset(const std::string& query) {
+boost::asio::awaitable<std::vector<CryptoAsset>> AlphaVantageProvider::SearchAsset(const std::string&) {
     if (HasCapability(CryptoCapability::Metadata)) {
-        Logger::Warn("[AlphaVantage] Crypto search not optimized.");
+        Logger::Warn(
+            "[AlphaVantage] Crypto search not optimized.");
     }
-    return {};
+    co_return std::vector<CryptoAsset>{};
 }
 
-std::optional<nlohmann::json> AlphaVantageProvider::PerformAVRequest(std::map<std::string, std::string> params) {
-    auto json_opt = PerformGet("/query", params);
+boost::asio::awaitable<std::optional<nlohmann::json>> AlphaVantageProvider::PerformAVRequestAsync(
+        std::map<std::string, std::string> params) {
+    auto json_opt = co_await PerformGetAsync("/query", params);
     
     if (json_opt.has_value()) {
         if (json_opt->contains("Error Message")) {
-            Logger::Error("[AlphaVantage] API Error: {}", 
-                            (json_opt.value())["Error Message"].get<std::string>());
-            return std::nullopt;
+            Logger::Error(
+                "[AlphaVantage] API Error: {}", 
+                (json_opt.value())["Error Message"].get<std::string>());
+            co_return std::nullopt;
         } else if (json_opt->contains("Note")) {
-            Logger::Warn("[AlphaVantage] Rate Limit Warning: {}", 
-                            (json_opt.value())["Note"].get<std::string>());
-            return std::nullopt;
+            Logger::Warn(
+                "[AlphaVantage] Rate Limit Warning: {}", 
+                (json_opt.value())["Note"].get<std::string>());
+            co_return std::nullopt;
         } else if (json_opt->contains("Information")) {
-            Logger::Warn("[AlphaVantage] Info: {}", 
-                            (json_opt.value())["Information"].get<std::string>());
-            return std::nullopt;
+            Logger::Warn(
+                "[AlphaVantage] Info: {}", 
+                (json_opt.value())["Information"].get<std::string>());
+            co_return std::nullopt;
         }
     }
-    return json_opt;
+    co_return json_opt;
 }
 
 std::string AlphaVantageProvider::ConvertInterval(const TimeFrame tf) {
@@ -580,7 +652,7 @@ std::string AlphaVantageProvider::ConvertInterval(const TimeFrame tf) {
         case TimeFrame::Hourly: 
             return "60min";
         case TimeFrame::Daily:
-            "daily";
+            return "daily";
         default: 
             throw std::runtime_error("Interval not supported by AlphaVantage");
     }
