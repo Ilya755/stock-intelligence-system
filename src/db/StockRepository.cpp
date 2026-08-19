@@ -187,8 +187,8 @@ boost::asio::awaitable<void> StockRepository::SaveCompanyFinancialReportsBatchAs
             company_id);
     } catch (const std::exception& ex) {
         Logger::Error(
-            "[StockRepository] Batch insert company {} financial reports failed", 
-            company_id);
+            "[StockRepository] Batch insert company {} financial reports failed: {}", 
+            company_id, ex.what());
     }
 }
 

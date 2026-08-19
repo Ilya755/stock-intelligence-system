@@ -129,8 +129,6 @@ int main() {
         Logger::InitFile(log_file_path.string(), "debug");
 
 
-        Logger::Info(
-            "[Init] Establishing Database Connection Pool...");
         Database db(io_context.get_executor());
 
         auto stock_repo = std::make_shared<StockRepository>(db);

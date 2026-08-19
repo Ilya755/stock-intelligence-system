@@ -140,7 +140,7 @@ asio::awaitable<PgResult> AsyncPgConnection::Query(std::string sql, PgParams par
     if (!IsHealthy()) {
         throw Error("PostgreSQL connection is not healthy");
     }
-    if (params.size() > std::numeric_limits<size_t>::max()) {
+    if (params.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
         throw std::invalid_argument("Too many PostgreSQL query parameters");
     }
 

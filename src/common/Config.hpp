@@ -28,7 +28,6 @@ struct ApiConfig {
 struct ServerConfig {
     int port;
     int read_timeout_seconds;
-    int max_threads;
 };
 
 struct DatabaseConfig {

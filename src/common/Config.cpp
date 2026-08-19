@@ -17,7 +17,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(
 )
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(
-    ServerConfig, port, read_timeout_seconds, max_threads
+    ServerConfig, port, read_timeout_seconds
 )
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(

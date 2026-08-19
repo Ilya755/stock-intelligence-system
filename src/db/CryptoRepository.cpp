@@ -299,7 +299,7 @@ boost::asio::awaitable<void> CryptoRepository::UpdateCryptoAssetNameAsync(
             "UPDATE crypto_assets "
             "SET name = $1 "
             "WHERE id = $2",
-            {Param(std::move(new_name)), Param(id)});
+            {Param(new_name), Param(id)});
 
         Logger::Debug(
             "[CryptoRepository] Updated name for crypto_asset_id {}: {}", 
